@@ -2,11 +2,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "build",
   "framework": null,
-  "rewrites": [
-    {
-      "source": "/app.html",
-      "destination": "/app.html"
-    }
-  ]
+  "cleanUrls": false,
+  "trailingSlash": false
 }
 
