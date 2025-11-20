@@ -14,7 +14,8 @@
   },
   "scripts": {
     "start": "craco start",
-    "build": "craco build",
+    "build": "craco build && npm run copy-index",
+    "copy-index": "cp public/index.html build/index.html",
     "test": "craco test",
     "eject": "react-scripts eject"
   },
