@@ -9,12 +9,13 @@
     "three": "^0.160.0",
     "@react-three/fiber": "^8.15.11",
     "@react-three/drei": "^9.88.13",
-    "react-scripts": "5.0.1"
+    "react-scripts": "5.0.1",
+    "@craco/craco": "^7.1.0"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
+    "start": "craco start",
+    "build": "craco build",
+    "test": "craco test",
     "eject": "react-scripts eject"
   },
   "browserslist": {
