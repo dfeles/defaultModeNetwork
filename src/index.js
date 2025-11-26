@@ -1,3 +1,7 @@
+if (process.env.NODE_ENV === "development") {
+  import("react-grab");
+}
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';

@@ -5,6 +5,7 @@ import STLViewer from './components/STLViewer';
 import ControlPanel from './components/ControlPanel';
 import ExportPanel from './components/ExportPanel';
 import { exportSceneToSVG, downloadSVG } from './utils/svgExporter';
+import { getSTLFileURL } from './config/stlFiles';
 import './App.css';
 
 function SceneExporter({ meshData, edgeSettings, onExport, onSVGGenerated, exportMethod }) {
@@ -60,13 +61,14 @@ function App() {
     setSelectedDefaultFile(filename);
     setGeneratedSVG(null); // Clear previous SVG
     try {
-      const response = await fetch(`/${filename}`);
+      const url = getSTLFileURL(filename);
+      const response = await fetch(url);
       if (response.ok) {
         const blob = await response.blob();
         const file = new File([blob], filename, { type: 'model/stl' });
         setStlFile(file);
       } else {
-        console.error(`Could not load ${filename}`);
+        console.error(`Could not load ${filename} from ${url}`);
       }
     } catch (error) {
       console.error(`Error loading ${filename}:`, error);
