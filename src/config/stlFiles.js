@@ -1,14 +1,17 @@
 // Configuration for STL file sources
-// For production, use jsDelivr CDN to avoid Vercel bandwidth limits
-// For development, you can use local files
+// STL files are hosted on GitHub Releases to avoid Vercel bandwidth limits
+// GitHub Releases supports large files (>20MB) unlike jsDelivr CDN
+// Since local files were removed, we always use GitHub Releases
 
-// Set to 'cdn' for production (jsDelivr) or 'local' for development
-const FILE_SOURCE = process.env.NODE_ENV === 'production' ? 'cdn' : 'local';
+// Always use GitHub Releases (local files were removed to save space)
+const FILE_SOURCE = 'github-releases';
 
-// jsDelivr CDN configuration
-// Format: https://cdn.jsdelivr.net/gh/USERNAME/REPO@BRANCH/PATH/FILE.stl
-// Example: https://cdn.jsdelivr.net/gh/yourusername/stl-files@main/120_Cell.stl
-const CDN_BASE_URL = 'https://cdn.jsdelivr.net/gh/dfeles/files@main';
+// GitHub Releases configuration
+// Format: https://github.com/USERNAME/REPO/releases/download/TAG/FILENAME
+// Example: https://github.com/dfeles/files/releases/download/v1.0.0/120_Cell.stl
+const RELEASE_TAG = 'v1.0.0';
+const GITHUB_REPO = 'dfeles/files';
+const RELEASES_BASE_URL = `https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}`;
 
 // STL file names
 const STL_FILES = {
@@ -19,17 +22,19 @@ const STL_FILES = {
 
 // Get the full URL for an STL file
 export const getSTLFileURL = (filename) => {
-  if (FILE_SOURCE === 'cdn') {
-    return `${CDN_BASE_URL}/${filename}`;
+  if (FILE_SOURCE === 'github-releases') {
+    return `${RELEASES_BASE_URL}/${filename}`;
   } else {
-    // Local development - serve from public folder
+    // Local development - serve from public folder (files removed, won't work)
     return `/${filename}`;
   }
 };
 
 export default {
   FILE_SOURCE,
-  CDN_BASE_URL,
+  RELEASES_BASE_URL,
+  RELEASE_TAG,
+  GITHUB_REPO,
   STL_FILES
 };
 

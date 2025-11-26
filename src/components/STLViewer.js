@@ -7,13 +7,29 @@ import EdgeDetectionMaterial from './shaders/EdgeDetectionMaterial';
 // Extend R3F with our custom material
 extend({ EdgeDetectionMaterial });
 
-function STLViewer({ file, onMeshLoaded, edgeSettings }) {
+function STLViewer({ file, onMeshLoaded, onError, edgeSettings }) {
   const meshRef = useRef();
   const materialRef = useRef();
   const [geometry, setGeometry] = useState(null);
+  const fileRef = useRef(null);
+  const isLoadingRef = useRef(false);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file) {
+      if (geometry) {
+        setGeometry(null);
+      }
+      return;
+    }
+
+    // Only reset if it's actually a different file
+    if (fileRef.current === file) {
+      return; // Same file, no need to reload
+    }
+    
+    // Mark as loading but keep old geometry visible
+    isLoadingRef.current = true;
+    fileRef.current = file;
 
     const loader = new STLLoader();
     const reader = new FileReader();
@@ -21,6 +37,28 @@ function STLViewer({ file, onMeshLoaded, edgeSettings }) {
     reader.onload = (e) => {
       try {
         const arrayBuffer = e.target.result;
+        
+        // Validate array buffer size
+        if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+          throw new Error('File is empty or invalid');
+        }
+        
+        // Check if file is too large (sanity check - might be HTML error page)
+        if (arrayBuffer.byteLength > 500 * 1024 * 1024) { // 500MB limit
+          throw new Error('File is too large. This might be an error page instead of an STL file.');
+        }
+        
+        // Quick check: STL files start with specific bytes or text
+        // Binary STL starts with 80 bytes of header, ASCII STL starts with "solid"
+        const uint8View = new Uint8Array(arrayBuffer, 0, Math.min(80, arrayBuffer.byteLength));
+        const textDecoder = new TextDecoder();
+        const headerText = textDecoder.decode(uint8View).trim().toLowerCase();
+        
+        // If it looks like HTML/error page, reject it
+        if (headerText.startsWith('<!doctype') || headerText.startsWith('<html') || headerText.includes('404') || headerText.includes('not found')) {
+          throw new Error('Received HTML error page instead of STL file. The file might not exist at the URL.');
+        }
+        
         const stlGeometry = loader.parse(arrayBuffer);
         
         // Compute normals if not present
@@ -38,7 +76,9 @@ function STLViewer({ file, onMeshLoaded, edgeSettings }) {
         const scale = 2 / maxDim;
         stlGeometry.scale(scale, scale, scale);
 
+        // Only update geometry after new one is ready (keeps old one visible during load)
         setGeometry(stlGeometry);
+        isLoadingRef.current = false;
         onMeshLoaded({
           geometry: stlGeometry,
           vertices: stlGeometry.attributes.position.count,
@@ -46,24 +86,48 @@ function STLViewer({ file, onMeshLoaded, edgeSettings }) {
         });
       } catch (error) {
         console.error('Error loading STL:', error);
-        alert('Error loading STL file: ' + error.message);
+        isLoadingRef.current = false;
+        // Don't clear geometry on error - keep showing the old one
+        if (onError) {
+          onError(error);
+        } else {
+          alert('Error loading STL file: ' + error.message);
+        }
       }
     };
 
     reader.onerror = () => {
-      alert('Error reading file');
+      isLoadingRef.current = false;
+      const error = new Error('Error reading file');
+      if (onError) {
+        onError(error);
+      } else {
+        alert('Error reading file');
+      }
     };
 
     reader.readAsArrayBuffer(file);
   }, [file, onMeshLoaded]);
 
   // Update material uniforms when edge settings change
+  const prevSettingsRef = useRef(edgeSettings);
   useFrame(() => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.edgeThreshold.value = edgeSettings.threshold;
-      materialRef.current.uniforms.edgeColor.value = new THREE.Color(edgeSettings.color);
-      materialRef.current.uniforms.edgeWidth.value = edgeSettings.width;
-      materialRef.current.uniforms.shadingColors.value = edgeSettings.shadingColors;
+    if (materialRef.current && geometry) {
+      const prev = prevSettingsRef.current;
+      // Only update if values actually changed to avoid unnecessary re-renders
+      if (prev.threshold !== edgeSettings.threshold) {
+        materialRef.current.uniforms.edgeThreshold.value = edgeSettings.threshold;
+      }
+      if (prev.color !== edgeSettings.color) {
+        materialRef.current.uniforms.edgeColor.value = new THREE.Color(edgeSettings.color);
+      }
+      if (prev.width !== edgeSettings.width) {
+        materialRef.current.uniforms.edgeWidth.value = edgeSettings.width;
+      }
+      if (prev.shadingColors !== edgeSettings.shadingColors) {
+        materialRef.current.uniforms.shadingColors.value = edgeSettings.shadingColors;
+      }
+      prevSettingsRef.current = edgeSettings;
     }
   });
 

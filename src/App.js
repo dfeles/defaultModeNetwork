@@ -37,6 +37,7 @@ function App() {
   const [meshData, setMeshData] = useState(null);
   const [generatedSVG, setGeneratedSVG] = useState(null);
   const [selectedDefaultFile, setSelectedDefaultFile] = useState('24_cell_Schlegel.stl');
+  const [isLoading, setIsLoading] = useState(false);
   const [edgeSettings, setEdgeSettings] = useState({
     threshold: 0.1,
     color: '#000000',
@@ -50,28 +51,63 @@ function App() {
   const dragCounterRef = useRef(0);
 
   const handleFileUpload = (file) => {
-    setStlFile(file);
+    setIsLoading(true);
+    setMeshData(null); // Clear previous mesh data
     setGeneratedSVG(null); // Clear previous SVG
     setSelectedDefaultFile(null); // Clear default selection when custom file is uploaded
+    setStlFile(file);
     // File will be loaded in STLViewer component
   };
 
   const handleDefaultFileSelect = React.useCallback(async (filename) => {
-    if (!filename) return;
+    if (!filename) {
+      setSelectedDefaultFile(null);
+      setStlFile(null);
+      setMeshData(null);
+      setIsLoading(false);
+      return;
+    }
     setSelectedDefaultFile(filename);
     setGeneratedSVG(null); // Clear previous SVG
+    setMeshData(null); // Clear previous mesh data
+    setIsLoading(true);
     try {
       const url = getSTLFileURL(filename);
+      console.log(`Loading STL from: ${url}`);
       const response = await fetch(url);
-      if (response.ok) {
-        const blob = await response.blob();
-        const file = new File([blob], filename, { type: 'model/stl' });
-        setStlFile(file);
-      } else {
-        console.error(`Could not load ${filename} from ${url}`);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`HTTP ${response.status} error loading ${filename} from ${url}:`, errorText);
+        setIsLoading(false);
+        alert(`Could not load ${filename} (HTTP ${response.status}). Please check the console for details.`);
+        return;
       }
+
+      // Check content type
+      const contentType = response.headers.get('content-type');
+      if (contentType && !contentType.includes('stl') && !contentType.includes('octet-stream') && !contentType.includes('model')) {
+        console.warn(`Unexpected content type: ${contentType} for ${filename}`);
+      }
+
+      const blob = await response.blob();
+      
+      // Validate blob size (STL files should be at least a few KB)
+      if (blob.size < 1000) {
+        // Might be an error page, try to read it
+        const text = await blob.text();
+        console.error(`File too small or invalid. Response:`, text.substring(0, 500));
+        setIsLoading(false);
+        alert(`Invalid file received for ${filename}. The file might not exist or the URL is incorrect.`);
+        return;
+      }
+
+      const file = new File([blob], filename, { type: 'model/stl' });
+      setStlFile(file);
     } catch (error) {
       console.error(`Error loading ${filename}:`, error);
+      setIsLoading(false);
+      alert(`Error loading ${filename}: ${error.message}`);
     }
   }, []);
 
@@ -162,6 +198,12 @@ function App() {
         onDefaultFileSelect={handleDefaultFileSelect}
       />
       <div className="canvas-container">
+        {isLoading && (
+          <div className="loading-overlay">
+            <div className="loading-spinner"></div>
+            <p>Loading STL file...</p>
+          </div>
+        )}
         <Canvas ref={canvasRef} gl={{ preserveDrawingBuffer: true }}>
           <PerspectiveCamera makeDefault position={[0, 0, 5]} />
           <ambientLight intensity={0.5} />
@@ -169,8 +211,17 @@ function App() {
           <OrbitControls enableDamping dampingFactor={0.05} />
           {stlFile && (
             <STLViewer
+              key={stlFile.name + stlFile.size}
               file={stlFile}
-              onMeshLoaded={setMeshData}
+              onMeshLoaded={(data) => {
+                setMeshData(data);
+                setIsLoading(false);
+              }}
+              onError={(error) => {
+                console.error('STL loading error:', error);
+                setIsLoading(false);
+                alert('Error loading STL file: ' + error.message);
+              }}
               edgeSettings={edgeSettings}
             />
           )}
