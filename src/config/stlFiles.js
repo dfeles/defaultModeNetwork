@@ -1,17 +1,18 @@
 // Configuration for STL file sources
-// STL files are hosted on GitHub Releases to avoid Vercel bandwidth limits
-// GitHub Releases supports large files (>20MB) unlike jsDelivr CDN
-// Since local files were removed, we always use GitHub Releases
+// STL files are hosted on GitHub (raw.githubusercontent.com) to avoid Vercel bandwidth limits
+// GitHub raw URLs support large files (>20MB) unlike jsDelivr CDN
+// In development, use a public CORS proxy to avoid CORS issues
+// In production, files are loaded directly from GitHub raw URLs
 
-// Always use GitHub Releases (local files were removed to save space)
-const FILE_SOURCE = 'github-releases';
+// Use CORS proxy in development, direct URLs in production
+const FILE_SOURCE = process.env.NODE_ENV === 'production' ? 'github-direct' : 'github-proxy';
 
-// GitHub Releases configuration
-// Format: https://github.com/USERNAME/REPO/releases/download/TAG/FILENAME
-// Example: https://github.com/dfeles/files/releases/download/v1.0.0/120_Cell.stl
-const RELEASE_TAG = 'v1.0.0';
+// GitHub configuration
 const GITHUB_REPO = 'dfeles/files';
-const RELEASES_BASE_URL = `https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}`;
+const GITHUB_BRANCH = 'main';
+const GITHUB_RAW_BASE_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`;
+// CORS proxy for development (public proxy service)
+const CORS_PROXY = 'https://corsproxy.io/?';
 
 // STL file names
 const STL_FILES = {
@@ -22,19 +23,21 @@ const STL_FILES = {
 
 // Get the full URL for an STL file
 export const getSTLFileURL = (filename) => {
-  if (FILE_SOURCE === 'github-releases') {
-    return `${RELEASES_BASE_URL}/${filename}`;
+  if (FILE_SOURCE === 'github-proxy') {
+    // Development: use CORS proxy to avoid CORS issues
+    const directUrl = `${GITHUB_RAW_BASE_URL}/${filename}`;
+    return `${CORS_PROXY}${encodeURIComponent(directUrl)}`;
   } else {
-    // Local development - serve from public folder (files removed, won't work)
-    return `/${filename}`;
+    // Production: use direct GitHub raw URL
+    return `${GITHUB_RAW_BASE_URL}/${filename}`;
   }
 };
 
 export default {
   FILE_SOURCE,
-  RELEASES_BASE_URL,
-  RELEASE_TAG,
+  GITHUB_RAW_BASE_URL,
   GITHUB_REPO,
+  GITHUB_BRANCH,
   STL_FILES
 };
 

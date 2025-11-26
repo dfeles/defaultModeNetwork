@@ -96,9 +96,21 @@ function App() {
       if (blob.size < 1000) {
         // Might be an error page, try to read it
         const text = await blob.text();
-        console.error(`File too small or invalid. Response:`, text.substring(0, 500));
+        console.error(`File too small or invalid. URL: ${url}, Size: ${blob.size} bytes`);
+        console.error(`Response preview:`, text.substring(0, 500));
         setIsLoading(false);
-        alert(`Invalid file received for ${filename}. The file might not exist or the URL is incorrect.`);
+        alert(`Invalid file received for ${filename}. The file might not exist or the URL is incorrect. Check console for details.`);
+        return;
+      }
+
+      // Check if it's actually HTML (error page)
+      const firstBytes = await blob.slice(0, 100).text();
+      if (firstBytes.trim().toLowerCase().startsWith('<!doctype') || 
+          firstBytes.trim().toLowerCase().startsWith('<html')) {
+        console.error(`Received HTML instead of STL file. URL: ${url}`);
+        console.error(`HTML preview:`, firstBytes.substring(0, 500));
+        setIsLoading(false);
+        alert(`Received HTML error page instead of STL file for ${filename}. Check console for details.`);
         return;
       }
 

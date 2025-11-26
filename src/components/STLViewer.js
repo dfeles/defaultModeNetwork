@@ -54,9 +54,18 @@ function STLViewer({ file, onMeshLoaded, onError, edgeSettings }) {
         const textDecoder = new TextDecoder();
         const headerText = textDecoder.decode(uint8View).trim().toLowerCase();
         
-        // If it looks like HTML/error page, reject it
-        if (headerText.startsWith('<!doctype') || headerText.startsWith('<html') || headerText.includes('404') || headerText.includes('not found')) {
-          throw new Error('Received HTML error page instead of STL file. The file might not exist at the URL.');
+        // If it looks like HTML/error page, reject it with more details
+        if (headerText.startsWith('<!doctype') || headerText.startsWith('<html')) {
+          const preview = textDecoder.decode(new Uint8Array(arrayBuffer, 0, Math.min(500, arrayBuffer.byteLength)));
+          console.error('Received HTML instead of STL. Preview:', preview);
+          throw new Error('Received HTML error page instead of STL file. The file might not exist at the URL. Check browser console for details.');
+        }
+        
+        // Check for common error messages
+        if (headerText.includes('404') || headerText.includes('not found') || headerText.includes('cannot get')) {
+          const preview = textDecoder.decode(new Uint8Array(arrayBuffer, 0, Math.min(500, arrayBuffer.byteLength)));
+          console.error('Received error page. Preview:', preview);
+          throw new Error('File not found. Check browser console for details.');
         }
         
         const stlGeometry = loader.parse(arrayBuffer);
