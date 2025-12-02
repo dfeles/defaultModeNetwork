@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { applyFloydSteinbergDithering } from './dithering';
 
 /**
  * Get color band from pixel color (for shading)
@@ -260,14 +261,15 @@ export function exportSceneToSVG(scene, camera, renderer, options = {}) {
     height = 800,
     edgeSettings = {},
     meshData = null,
-    exportMethod = 'canvas' // 'canvas' or 'geometry'
+    exportMethod = 'canvas', // 'canvas' or 'geometry'
+    applyDithering = false // Whether to apply dithering to the canvas
   } = options;
 
   // Route to appropriate export method
   if (exportMethod === 'geometry') {
     return exportSceneToSVGGeometry(scene, camera, renderer, options);
   } else {
-    return exportSceneToSVGCanvas(scene, camera, renderer, options);
+    return exportSceneToSVGCanvas(scene, camera, renderer, { ...options, applyDithering });
   }
 }
 
@@ -279,7 +281,8 @@ function exportSceneToSVGCanvas(scene, camera, renderer, options = {}) {
     width = 800,
     height = 800,
     edgeSettings = {},
-    meshData = null
+    meshData = null,
+    applyDithering = false
   } = options;
 
   // Create SVG header
@@ -352,14 +355,42 @@ function exportSceneToSVGCanvas(scene, camera, renderer, options = {}) {
       }
     }
     
-    // Step 2: Trace edges from the image (grouped by color)
+    // Step 2: Convert ImageData to base64 image for embedding in SVG
+    console.log('Converting canvas image to base64...');
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = processWidth;
+    tempCanvas.height = processHeight;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.putImageData(imageData, 0, 0);
+    
+    // Get base64 data URL
+    const imageDataUrl = tempCanvas.toDataURL('image/png');
+    
+    // Step 3: Apply dithering if requested
+    let processedImageData = imageData;
+    if (applyDithering) {
+      console.log('Applying Floyd-Steinberg dithering...');
+      processedImageData = applyFloydSteinbergDithering(imageData, 2); // 2 levels = black and white
+      
+      // Update the temp canvas with dithered image
+      tempCtx.putImageData(processedImageData, 0, 0);
+      const ditheredDataUrl = tempCanvas.toDataURL('image/png');
+      
+      // Embed dithered image in SVG
+      svg += `  <image href="${ditheredDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none"/>\n`;
+    } else {
+      // Embed original canvas image in SVG
+      svg += `  <image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none"/>\n`;
+    }
+    
+    // Step 4: Trace edges from the image (grouped by color)
     console.log('Tracing edges from rendered image...');
     const edgeColor = edgeSettings.color || '#000000';
     const numShadingColors = edgeSettings.shadingColors || 1;
-    const segmentsByColor = traceEdgesFromImageData(imageData, processWidth, processHeight, edgeColor, numShadingColors);
+    const segmentsByColor = traceEdgesFromImageData(processedImageData, processWidth, processHeight, edgeColor, numShadingColors);
     console.log(`Found edges in ${segmentsByColor.size} color groups`);
     
-    // Step 3: Connect segments into paths for each color
+    // Step 5: Connect segments into paths for each color
     console.log('Connecting segments into paths...');
     const startTime = Date.now();
     const pathsByColor = new Map();
@@ -378,7 +409,7 @@ function exportSceneToSVGCanvas(scene, camera, renderer, options = {}) {
       svg += '  <!-- No paths found - check if canvas has rendered content -->\n';
     }
     
-    // Step 4: Generate SVG paths grouped by color
+    // Step 6: Generate SVG paths grouped by color (on top of the image)
     const strokeWidth = edgeSettings.width || 1;
     
     // Scale paths to match requested SVG dimensions
@@ -1019,6 +1050,66 @@ function getDepthColor(depth, minDepth, maxDepth, numColors, baseColor) {
   const newB = Math.floor(b + (255 - b) * brightness);
 
   return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
+/**
+ * Export an image texture to SVG with optional dithering
+ */
+export function exportImageToSVG(texture, renderer, options = {}) {
+  const {
+    width = 800,
+    height = 800,
+    imageWidth = 800,
+    imageHeight = 800,
+    applyDithering = false
+  } = options;
+
+  // Create SVG header
+  let svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+`;
+
+  if (!texture || !texture.image) {
+    svg += '</svg>';
+    return svg;
+  }
+
+  try {
+    // Create a temporary canvas to render the texture
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = imageWidth;
+    tempCanvas.height = imageHeight;
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    // Draw the image to the canvas
+    tempCtx.drawImage(texture.image, 0, 0, imageWidth, imageHeight);
+    
+    // Get ImageData
+    const imageData = tempCtx.getImageData(0, 0, imageWidth, imageHeight);
+    
+    // Apply dithering if requested
+    let processedImageData = imageData;
+    if (applyDithering) {
+      console.log('Applying Floyd-Steinberg dithering to image...');
+      processedImageData = applyFloydSteinbergDithering(imageData, 2);
+      
+      // Update canvas with dithered image
+      tempCtx.putImageData(processedImageData, 0, 0);
+    }
+    
+    // Convert to base64 data URL
+    const imageDataUrl = tempCanvas.toDataURL('image/png');
+    
+    // Embed image in SVG
+    svg += `  <image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet"/>\n`;
+    
+  } catch (error) {
+    console.error('Error exporting image to SVG:', error);
+    svg += '  <!-- Error exporting image: ' + error.message + ' -->\n';
+  }
+
+  svg += '</svg>';
+  return svg;
 }
 
 export function downloadSVG(svgString, filename = 'export.svg') {
