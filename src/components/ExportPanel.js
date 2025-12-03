@@ -1,16 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import './ExportPanel.css';
 
-function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage, inputMode, exportMethod, onExportMethodChange, activeTab, onTabChange }) {
-  const [localActiveTab, setLocalActiveTab] = useState(activeTab || '3d-object');
-  
-  const handleTabChange = (tab) => {
-    setLocalActiveTab(tab);
-    if (onTabChange) {
-      onTabChange(tab);
-    }
-  };
-
+function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange }) {
   const hasContent = hasMesh || hasImage;
 
   return (
@@ -20,71 +11,96 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
         <p className="subtitle">SVG Generation</p>
       </div>
 
-      <div className="panel-section">
-        <div className="export-tabs">
-          <button
-            className={`export-tab ${localActiveTab === '3d-object' ? 'active' : ''}`}
-            onClick={() => handleTabChange('3d-object')}
-          >
-            3D Object
-          </button>
-          <button
-            className={`export-tab ${localActiveTab === 'dithering' ? 'active' : ''}`}
-            onClick={() => handleTabChange('dithering')}
-          >
-            Dithering
-          </button>
-        </div>
-      </div>
-
-      {localActiveTab === '3d-object' && (
+      {/* Settings Panel - Only show when 3D is loaded */}
+      {hasMesh && inputMode === 'stl' && (
         <div className="panel-section">
-          <h3>Export Method</h3>
+          <h3>Settings</h3>
+          
           <div className="control-group">
             <label>
-              Export Method
-              <select
-                value={exportMethod}
-                onChange={(e) => onExportMethodChange(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  background: '#1a1a1a',
-                  border: '1px solid #2a2a2a',
-                  borderRadius: '8px',
-                  color: '#ffffff',
-                  fontSize: '14px',
-                  marginTop: '8px',
-                  cursor: 'pointer'
-                }}
-              >
-                <option value="canvas">Canvas-based (from shader output)</option>
-                <option value="geometry">Geometry-based (from mesh data)</option>
-              </select>
-              <small>Canvas: Captures and vectorizes the rendered image - matches what you see</small>
-              <small style={{ display: 'block', marginTop: '4px' }}>Geometry: Extracts edges directly from 3D geometry - more precise but may show extra lines</small>
+              Edge Threshold
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={edgeSettings.threshold}
+                onChange={(e) => onEdgeSettingsChange({
+                  ...edgeSettings,
+                  threshold: parseFloat(e.target.value)
+                })}
+              />
+              <span className="value-display">{edgeSettings.threshold.toFixed(2)}</span>
+            </label>
+          </div>
+
+          <div className="control-group">
+            <label>
+              Edge Color
+              <input
+                type="color"
+                value={edgeSettings.color}
+                onChange={(e) => onEdgeSettingsChange({
+                  ...edgeSettings,
+                  color: e.target.value
+                })}
+              />
+            </label>
+          </div>
+
+          <div className="control-group">
+            <label>
+              Edge Width
+              <input
+                type="range"
+                min="0.5"
+                max="5"
+                step="0.1"
+                value={edgeSettings.width}
+                onChange={(e) => onEdgeSettingsChange({
+                  ...edgeSettings,
+                  width: parseFloat(e.target.value)
+                })}
+              />
+              <span className="value-display">{edgeSettings.width.toFixed(1)}</span>
+            </label>
+          </div>
+
+          <div className="control-group">
+            <label>
+              Shading Colors
+              <input
+                type="number"
+                min="1"
+                max="10"
+                value={edgeSettings.shadingColors}
+                onChange={(e) => onEdgeSettingsChange({
+                  ...edgeSettings,
+                  shadingColors: parseInt(e.target.value) || 1
+                })}
+              />
+              <small>Number of discrete color bands (1 = no shading)</small>
             </label>
           </div>
         </div>
       )}
 
-      {localActiveTab === 'dithering' && (
+      {/* Effects Panel - Show when 3D or image is loaded */}
+      {(hasMesh || hasImage) && (
         <div className="panel-section">
-          <h3>Dithering Settings</h3>
-          {inputMode === 'image' ? (
-            <>
-              <p style={{ color: '#888', fontSize: '13px', marginBottom: '16px' }}>
-                Apply dithering to the image before converting to SVG. This creates a stylized halftone effect.
-              </p>
-              <p style={{ color: '#666', fontSize: '12px', fontStyle: 'italic' }}>
-                Dithering will be automatically applied when generating the SVG.
-              </p>
-            </>
-          ) : (
-            <p style={{ color: '#888', fontSize: '13px', marginBottom: '16px' }}>
-              Apply dithering to the canvas image before converting to SVG. This creates a stylized halftone effect.
-            </p>
-          )}
+          <h3>Effects</h3>
+          
+          <div className="control-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={applyDithering}
+                onChange={(e) => onDitheringChange(e.target.checked)}
+              />
+              Apply Dithering
+            </label>
+            <small>Apply Floyd-Steinberg dithering to create a stylized halftone effect</small>
+          </div>
         </div>
       )}
 
@@ -94,7 +110,7 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
           onClick={onGenerateSVG}
           disabled={!hasContent}
         >
-          Generate SVG Preview
+          Generate SVG
         </button>
         {!hasContent && (
           <p className="hint">Load a file first</p>
@@ -104,7 +120,7 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
       {generatedSVG && (
         <div className="panel-section">
           <div className="svg-preview-container">
-            <h3>SVG Preview</h3>
+            <h3>Preview</h3>
             {(() => {
               // Calculate metadata
               const fileSize = new Blob([generatedSVG]).size;

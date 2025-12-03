@@ -1,33 +1,51 @@
 import React from 'react';
+import { Image as ImageIcon, Box } from 'lucide-react';
 import './ControlPanel.css';
 
-function ControlPanel({ onFileUpload, edgeSettings, onEdgeSettingsChange, hasMesh, hasImage, inputMode, selectedDefaultFile, onDefaultFileSelect }) {
-  const handleFileChange = (e, mode) => {
+function ControlPanel({ onFileUpload, inputMode, selectedDefaultFile, onDefaultFileSelect, loadedImages, currentImageFileName }) {
+  const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     
-    if (mode === 'image') {
-      const isImage = file.type.startsWith('image/') || 
-                     /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(file.name);
-      if (isImage) {
-        onFileUpload(file, 'image');
-      } else {
-        alert('Please select a valid image file (jpg, png, gif, etc.)');
-      }
+    // Determine file type
+    const isImage = file.type.startsWith('image/') || 
+                   /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(file.name);
+    const isSTL = file.name.endsWith('.stl');
+    
+    if (isImage) {
+      onFileUpload(file, 'image');
+    } else if (isSTL) {
+      onFileUpload(file, 'stl');
     } else {
-      if (file.name.endsWith('.stl')) {
-        onFileUpload(file, 'stl');
-      } else {
-        alert('Please select a valid STL file');
-      }
+      alert('Please select a valid STL file or image (jpg, png, gif, etc.)');
     }
+    
+    // Reset input so same file can be selected again
+    e.target.value = '';
   };
 
   const defaultFiles = [
-    { value: '24_cell_Schlegel.stl', label: '24-Cell (Schlegel)' },
-    { value: '120_Cell.stl', label: '120-Cell' },
-    { value: '600_cell.stl', label: '600-Cell' }
+    { value: '24_cell_Schlegel.stl', label: '24-Cell (Schlegel)', type: 'stl' },
+    { value: '120_Cell.stl', label: '120-Cell', type: 'stl' },
+    { value: '600_cell.stl', label: '600-Cell', type: 'stl' },
+    { value: 'clouds.jpg', label: 'Clouds', type: 'image' }
   ];
+
+  const handleFileListItemClick = (fileEntry) => {
+    if (fileEntry.type === 'image') {
+      // Check if it's a preloaded image (from GitHub) or uploaded image
+      if (fileEntry.file) {
+        // Reload the image file - this is an existing selection, don't reorder
+        onFileUpload(fileEntry.file, 'image', true);
+      } else {
+        // Preloaded image from GitHub
+        onDefaultFileSelect(fileEntry.value);
+      }
+    } else {
+      // Load default STL file or preloaded image
+      onDefaultFileSelect(fileEntry.value);
+    }
+  };
 
   return (
     <div className="control-panel">
@@ -37,168 +55,64 @@ function ControlPanel({ onFileUpload, edgeSettings, onEdgeSettingsChange, hasMes
       </div>
 
       <div className="panel-section">
-        <h3>Load File</h3>
+        <h3>Import</h3>
         
-        <div className="control-group">
-          <label>
-            Input Type
-            <select
-              value={inputMode || 'stl'}
-              onChange={(e) => {
-                // Reset when switching modes
-                if (e.target.value === 'stl') {
-                  onFileUpload(null, 'stl');
-                } else {
-                  onFileUpload(null, 'image');
-                }
-              }}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                background: '#1a1a1a',
-                border: '1px solid #2a2a2a',
-                borderRadius: '8px',
-                color: '#ffffff',
-                fontSize: '14px',
-                marginTop: '8px',
-                cursor: 'pointer'
-              }}
-            >
-              <option value="stl">3D Model (STL)</option>
-              <option value="image">Image (JPG, PNG, etc.)</option>
-            </select>
-          </label>
-        </div>
+        <label className="file-upload-button">
+          <input
+            type="file"
+            accept=".stl,image/*"
+            onChange={handleFileChange}
+            style={{ display: 'none' }}
+          />
+          Load STL or Image
+        </label>
 
-        {(inputMode !== 'image') && (
-          <>
-            <div className="control-group">
-              <label>
-                Default Models
-                <select
-                  value={selectedDefaultFile || ''}
-                  onChange={(e) => onDefaultFileSelect(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    background: '#1a1a1a',
-                    border: '1px solid #2a2a2a',
-                    borderRadius: '8px',
-                    color: '#ffffff',
-                    fontSize: '14px',
-                    marginTop: '8px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <option value="">-- Select a default model --</option>
-                  {defaultFiles.map(file => (
-                    <option key={file.value} value={file.value}>{file.label}</option>
-                  ))}
-                </select>
-                <small>Choose from pre-loaded cell models</small>
-              </label>
-            </div>
-
-            <div style={{ margin: '16px 0', textAlign: 'center', color: '#888' }}>
-              OR
-            </div>
-
-            <label className="file-upload-button">
-              <input
-                type="file"
-                accept=".stl"
-                onChange={(e) => handleFileChange(e, 'stl')}
-                style={{ display: 'none' }}
-              />
-              Choose Custom STL File
-            </label>
-          </>
-        )}
-
-        {inputMode === 'image' && (
-          <label className="file-upload-button">
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => handleFileChange(e, 'image')}
-              style={{ display: 'none' }}
-            />
-            Choose Image File
-          </label>
-        )}
-      </div>
-
-      <div className="panel-section">
-        <h3>Edge Detection Settings</h3>
-        
-        <div className="control-group">
-          <label>
-            Edge Threshold
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={edgeSettings.threshold}
-              onChange={(e) => onEdgeSettingsChange({
-                ...edgeSettings,
-                threshold: parseFloat(e.target.value)
-              })}
-            />
-            <span className="value-display">{edgeSettings.threshold.toFixed(2)}</span>
-          </label>
-        </div>
-
-        <div className="control-group">
-          <label>
-            Edge Color
-            <input
-              type="color"
-              value={edgeSettings.color}
-              onChange={(e) => onEdgeSettingsChange({
-                ...edgeSettings,
-                color: e.target.value
-              })}
-            />
-          </label>
-        </div>
-
-        <div className="control-group">
-          <label>
-            Edge Width
-            <input
-              type="range"
-              min="0.5"
-              max="5"
-              step="0.1"
-              value={edgeSettings.width}
-              onChange={(e) => onEdgeSettingsChange({
-                ...edgeSettings,
-                width: parseFloat(e.target.value)
-              })}
-            />
-            <span className="value-display">{edgeSettings.width.toFixed(1)}</span>
-          </label>
-        </div>
-
-        <div className="control-group">
-          <label>
-            Shading Colors
-            <input
-              type="number"
-              min="1"
-              max="10"
-              value={edgeSettings.shadingColors}
-              onChange={(e) => onEdgeSettingsChange({
-                ...edgeSettings,
-                shadingColors: parseInt(e.target.value) || 1
-              })}
-            />
-            <small>Number of discrete color bands (1 = no shading)</small>
-          </label>
+        <div className="file-list-container">
+          <div className="file-list">
+            {/* Loaded images at the top */}
+            {loadedImages.map(imageEntry => (
+              <div
+                key={imageEntry.id}
+                data-type="image"
+                className={`file-list-item ${inputMode === 'image' && currentImageFileName === imageEntry.name ? 'active' : ''}`}
+                onClick={() => handleFileListItemClick(imageEntry)}
+              >
+                {imageEntry.thumbnailUrl ? (
+                  <img 
+                    src={imageEntry.thumbnailUrl} 
+                    alt={imageEntry.name}
+                    className="file-list-thumbnail"
+                  />
+                ) : (
+                  <div className="file-list-icon">
+                    <ImageIcon size={16} />
+                  </div>
+                )}
+                <span className="file-list-name">{imageEntry.name}</span>
+              </div>
+            ))}
+            
+            {/* Default files (STL and images) */}
+            {defaultFiles.map(file => (
+              <div
+                key={file.value}
+                data-type={file.type}
+                className={`file-list-item ${selectedDefaultFile === file.value ? 'active' : ''}`}
+                onClick={() => handleFileListItemClick(file)}
+              >
+                <div className="file-list-icon">
+                  {file.type === 'image' ? (
+                    <ImageIcon size={16} />
+                  ) : (
+                    <Box size={16} />
+                  )}
+                </div>
+                <span className="file-list-name">{file.label}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
-
 
       <div className="panel-section">
         <h3>Controls</h3>

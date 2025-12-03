@@ -1,5 +1,5 @@
-// Configuration for STL file sources
-// STL files are hosted on GitHub (raw.githubusercontent.com) to avoid Vercel bandwidth limits
+// Configuration for STL and image file sources
+// Files are hosted on GitHub (raw.githubusercontent.com) to avoid Vercel bandwidth limits
 // GitHub raw URLs support large files (>20MB) unlike jsDelivr CDN
 // In development, use a public CORS proxy to avoid CORS issues
 // In production, files are loaded directly from GitHub raw URLs
@@ -21,6 +21,11 @@ const STL_FILES = {
   '600_cell.stl': '600_cell.stl'
 };
 
+// Image file names
+const IMAGE_FILES = {
+  'clouds.jpg': 'clouds.jpg'
+};
+
 // Get the full URL for an STL file
 export const getSTLFileURL = (filename) => {
   if (FILE_SOURCE === 'github-proxy') {
@@ -33,11 +38,17 @@ export const getSTLFileURL = (filename) => {
   }
 };
 
+// Get the full URL for an image file
+export const getImageFileURL = (filename) => {
+  return getSTLFileURL(filename); // Same logic for images
+};
+
 export default {
   FILE_SOURCE,
   GITHUB_RAW_BASE_URL,
   GITHUB_REPO,
   GITHUB_BRANCH,
-  STL_FILES
+  STL_FILES,
+  IMAGE_FILES
 };
 

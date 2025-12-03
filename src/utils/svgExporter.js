@@ -253,7 +253,7 @@ function connectSegments(segments, tolerance = 0.5) {
 }
 
 /**
- * Export the current 3D scene view as SVG by capturing and vectorizing the canvas
+ * Export the current 3D scene view as SVG using geometry-based method
  */
 export function exportSceneToSVG(scene, camera, renderer, options = {}) {
   const {
@@ -261,187 +261,13 @@ export function exportSceneToSVG(scene, camera, renderer, options = {}) {
     height = 800,
     edgeSettings = {},
     meshData = null,
-    exportMethod = 'canvas', // 'canvas' or 'geometry'
-    applyDithering = false // Whether to apply dithering to the canvas
+    applyDithering = false // Whether to apply dithering (for future use)
   } = options;
 
-  // Route to appropriate export method
-  if (exportMethod === 'geometry') {
-    return exportSceneToSVGGeometry(scene, camera, renderer, options);
-  } else {
-    return exportSceneToSVGCanvas(scene, camera, renderer, { ...options, applyDithering });
-  }
+  // Always use geometry-based export
+  return exportSceneToSVGGeometry(scene, camera, renderer, options);
 }
 
-/**
- * Canvas-based export: captures rendered image and vectorizes it
- */
-function exportSceneToSVGCanvas(scene, camera, renderer, options = {}) {
-  const {
-    width = 800,
-    height = 800,
-    edgeSettings = {},
-    meshData = null,
-    applyDithering = false
-  } = options;
-
-  // Create SVG header
-  let svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-`;
-
-  if (!meshData || !renderer) {
-    svg += '</svg>';
-    return svg;
-  }
-
-  try {
-    // Step 1: Capture the rendered canvas
-    console.log('Capturing canvas...', { width, height });
-    
-    // Get the actual canvas size
-    const canvas = renderer.domElement;
-    const actualWidth = canvas.width;
-    const actualHeight = canvas.height;
-    console.log('Actual canvas size:', { actualWidth, actualHeight });
-    
-    // Downsample for faster processing (max 1000px on longest side)
-    const maxDimension = 1000;
-    let processWidth = actualWidth;
-    let processHeight = actualHeight;
-    let scaleFactor = 1;
-    
-    if (actualWidth > maxDimension || actualHeight > maxDimension) {
-      scaleFactor = maxDimension / Math.max(actualWidth, actualHeight);
-      processWidth = Math.floor(actualWidth * scaleFactor);
-      processHeight = Math.floor(actualHeight * scaleFactor);
-      console.log(`Downsampling to ${processWidth}x${processHeight} for faster processing`);
-    }
-    
-    // Read pixel data from the WebGL canvas
-    const gl = renderer.getContext();
-    const pixels = new Uint8Array(actualWidth * actualHeight * 4);
-    gl.readPixels(0, 0, actualWidth, actualHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    
-    // Create ImageData (need to flip vertically since WebGL origin is bottom-left)
-    // If downsampling, do it during the flip
-    const imageData = new ImageData(processWidth, processHeight);
-    
-    if (scaleFactor < 1) {
-      // Downsample while flipping
-      for (let y = 0; y < processHeight; y++) {
-        for (let x = 0; x < processWidth; x++) {
-          const srcX = Math.floor(x / scaleFactor);
-          const srcY = Math.floor((processHeight - 1 - y) / scaleFactor); // Flip Y
-          const srcIdx = (srcY * actualWidth + srcX) * 4;
-          const dstIdx = (y * processWidth + x) * 4;
-          imageData.data[dstIdx] = pixels[srcIdx];
-          imageData.data[dstIdx + 1] = pixels[srcIdx + 1];
-          imageData.data[dstIdx + 2] = pixels[srcIdx + 2];
-          imageData.data[dstIdx + 3] = pixels[srcIdx + 3];
-        }
-      }
-    } else {
-      // Just flip
-      for (let y = 0; y < actualHeight; y++) {
-        for (let x = 0; x < actualWidth; x++) {
-          const srcIdx = ((actualHeight - 1 - y) * actualWidth + x) * 4; // Flip Y
-          const dstIdx = (y * actualWidth + x) * 4;
-          imageData.data[dstIdx] = pixels[srcIdx];
-          imageData.data[dstIdx + 1] = pixels[srcIdx + 1];
-          imageData.data[dstIdx + 2] = pixels[srcIdx + 2];
-          imageData.data[dstIdx + 3] = pixels[srcIdx + 3];
-        }
-      }
-    }
-    
-    // Step 2: Convert ImageData to base64 image for embedding in SVG
-    console.log('Converting canvas image to base64...');
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = processWidth;
-    tempCanvas.height = processHeight;
-    const tempCtx = tempCanvas.getContext('2d');
-    tempCtx.putImageData(imageData, 0, 0);
-    
-    // Get base64 data URL
-    const imageDataUrl = tempCanvas.toDataURL('image/png');
-    
-    // Step 3: Apply dithering if requested
-    let processedImageData = imageData;
-    if (applyDithering) {
-      console.log('Applying Floyd-Steinberg dithering...');
-      processedImageData = applyFloydSteinbergDithering(imageData, 2); // 2 levels = black and white
-      
-      // Update the temp canvas with dithered image
-      tempCtx.putImageData(processedImageData, 0, 0);
-      const ditheredDataUrl = tempCanvas.toDataURL('image/png');
-      
-      // Embed dithered image in SVG
-      svg += `  <image href="${ditheredDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none"/>\n`;
-    } else {
-      // Embed original canvas image in SVG
-      svg += `  <image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none"/>\n`;
-    }
-    
-    // Step 4: Trace edges from the image (grouped by color)
-    console.log('Tracing edges from rendered image...');
-    const edgeColor = edgeSettings.color || '#000000';
-    const numShadingColors = edgeSettings.shadingColors || 1;
-    const segmentsByColor = traceEdgesFromImageData(processedImageData, processWidth, processHeight, edgeColor, numShadingColors);
-    console.log(`Found edges in ${segmentsByColor.size} color groups`);
-    
-    // Step 5: Connect segments into paths for each color
-    console.log('Connecting segments into paths...');
-    const startTime = Date.now();
-    const pathsByColor = new Map();
-    
-    segmentsByColor.forEach((segments, color) => {
-      const paths = connectSegments(segments);
-      pathsByColor.set(color, paths);
-    });
-    
-    const totalPaths = Array.from(pathsByColor.values()).reduce((sum, paths) => sum + paths.length, 0);
-    const elapsed = Date.now() - startTime;
-    console.log(`Created ${totalPaths} continuous paths in ${elapsed}ms`);
-    
-    if (totalPaths === 0) {
-      console.warn('No paths created - SVG will be empty');
-      svg += '  <!-- No paths found - check if canvas has rendered content -->\n';
-    }
-    
-    // Step 6: Generate SVG paths grouped by color (on top of the image)
-    const strokeWidth = edgeSettings.width || 1;
-    
-    // Scale paths to match requested SVG dimensions
-    // Account for both downsampling and canvas-to-SVG scaling
-    const scaleX = width / processWidth;
-    const scaleY = height / processHeight;
-    
-    svg += '  <g id="edges">\n';
-    
-    pathsByColor.forEach((paths, color) => {
-      paths.forEach(path => {
-        if (path.length < 2) return;
-        
-        let pathData = `M ${(path[0].x * scaleX).toFixed(2)},${(path[0].y * scaleY).toFixed(2)}`;
-        for (let i = 1; i < path.length; i++) {
-          pathData += ` L ${(path[i].x * scaleX).toFixed(2)},${(path[i].y * scaleY).toFixed(2)}`;
-        }
-        
-        svg += `    <path d="${pathData}" stroke="${color}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>\n`;
-      });
-    });
-    
-    svg += '  </g>\n';
-    
-  } catch (error) {
-    console.error('Error capturing canvas:', error);
-    svg += '  <!-- Error capturing canvas: ' + error.message + ' -->\n';
-  }
-
-  svg += '</svg>';
-  return svg;
-}
 
 /**
  * Geometry-based export: extracts edges directly from mesh data
