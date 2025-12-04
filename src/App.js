@@ -98,6 +98,7 @@ function App() {
   const dragCounterRef = useRef(0);
   const loadedImagesRef = useRef([]);
   const previewContainerRef = useRef(null);
+  const transformRef = useRef(null);
 
   const handleFileUpload = (file, mode, isExistingSelection = false) => {
     setIsLoading(true);
@@ -290,6 +291,34 @@ function App() {
       window.removeEventListener('resize', handleResize);
     };
   }, [imageData]);
+
+  // Center the view when image preview loads
+  useEffect(() => {
+    if ((processedPreviewUrl || imagePreviewUrl) && transformRef.current?.centerView) {
+      // Use multiple timeouts to ensure the DOM is ready
+      const timer1 = setTimeout(() => {
+        if (transformRef.current?.centerView) {
+          transformRef.current.centerView();
+        }
+      }, 50);
+      const timer2 = setTimeout(() => {
+        if (transformRef.current?.centerView) {
+          transformRef.current.centerView();
+        }
+      }, 200);
+      const timer3 = setTimeout(() => {
+        if (transformRef.current?.centerView) {
+          transformRef.current.centerView();
+        }
+      }, 500);
+      
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+        clearTimeout(timer3);
+      };
+    }
+  }, [processedPreviewUrl, imagePreviewUrl]);
 
   // Generate preview image when image data or dithering settings change (fast preview)
   // This only generates a preview image, NOT SVG
@@ -681,6 +710,7 @@ function App() {
             {generatedSVG ? (
               <div className="svg-preview-view">
                 <TransformWrapper
+                  key={`svg-${generatedSVG.substring(0, 50)}`}
                   initialScale={1}
                   minScale={0.1}
                   maxScale={10}
@@ -689,7 +719,10 @@ function App() {
                   pan={{ disabled: false }}
                   zoom={{ disabled: false }}
                   centerOnInit={true}
+                  centerZoomedOut={true}
                   limitToBounds={false}
+                  initialPositionX={0}
+                  initialPositionY={0}
                 >
                   <TransformComponent
                     wrapperClass="svg-preview-content"
@@ -702,6 +735,8 @@ function App() {
             ) : (processedPreviewUrl || imagePreviewUrl) ? (
               <div className="svg-preview-view" ref={previewContainerRef}>
                 <TransformWrapper
+                  key={`preview-${processedPreviewUrl || imagePreviewUrl}`}
+                  ref={transformRef}
                   initialScale={initialScale}
                   minScale={0.01}
                   maxScale={10}
@@ -710,28 +745,36 @@ function App() {
                   pan={{ disabled: false }}
                   zoom={{ disabled: false }}
                   centerOnInit={true}
+                  centerZoomedOut={true}
                   limitToBounds={false}
                   initialPositionX={0}
                   initialPositionY={0}
                 >
-                  <TransformComponent
-                    wrapperClass="svg-preview-content"
-                    contentClass="svg-preview-inner"
-                  >
-                    <img 
-                      src={processedPreviewUrl || imagePreviewUrl} 
-                      alt="Preview" 
-                      width={imageData?.width}
-                      height={imageData?.height}
-                      style={{ 
-                        maxWidth: 'none',
-                        maxHeight: 'none',
-                        width: 'auto',
-                        height: 'auto',
-                        display: 'block'
-                      }} 
-                    />
-                  </TransformComponent>
+                  {({ centerView }) => {
+                    // Store centerView function in ref for use in useEffect
+                    transformRef.current = { centerView };
+                    
+                    return (
+                      <TransformComponent
+                        wrapperClass="svg-preview-content"
+                        contentClass="svg-preview-inner"
+                      >
+                        <img 
+                          src={processedPreviewUrl || imagePreviewUrl} 
+                          alt="Preview" 
+                          width={imageData?.width}
+                          height={imageData?.height}
+                          style={{ 
+                            maxWidth: 'none',
+                            maxHeight: 'none',
+                            width: 'auto',
+                            height: 'auto',
+                            display: 'block'
+                          }} 
+                        />
+                      </TransformComponent>
+                    );
+                  }}
                 </TransformWrapper>
               </div>
             ) : (
