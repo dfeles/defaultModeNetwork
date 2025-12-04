@@ -39,8 +39,9 @@ export const getSTLFileURL = (filename) => {
 };
 
 // Get the full URL for an image file
+// Always use GitHub hosting (same as STL files)
 export const getImageFileURL = (filename) => {
-  return getSTLFileURL(filename); // Same logic for images
+  return getSTLFileURL(filename); // Use GitHub hosting for images too
 };
 
 export default {

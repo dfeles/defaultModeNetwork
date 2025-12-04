@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import STLViewer from './components/STLViewer';
 import ImageViewer from './components/ImageViewer';
 import ControlPanel from './components/ControlPanel';
 import ExportPanel from './components/ExportPanel';
 import { exportSceneToSVG, downloadSVG, exportImageToSVG } from './utils/svgExporter';
 import { getSTLFileURL, getImageFileURL } from './config/stlFiles';
+import { applyFloydSteinbergDithering } from './utils/dithering';
 
 import { DevOverlay } from 'mindone'
 import './App.css';
@@ -72,12 +74,13 @@ function App() {
   const [stlFile, setStlFile] = useState(null);
   const [imageFile, setImageFile] = useState(null);
   const [imageData, setImageData] = useState(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState(null); // For immediate display
+  const [imagePreviewUrl, setImagePreviewUrl] = useState(null); // For immediate display (original image)
+  const [processedPreviewUrl, setProcessedPreviewUrl] = useState(null); // For processed preview (with dithering)
   const [meshData, setMeshData] = useState(null);
   const [generatedSVG, setGeneratedSVG] = useState(null);
-  const [selectedDefaultFile, setSelectedDefaultFile] = useState('24_cell_Schlegel.stl');
+  const [selectedDefaultFile, setSelectedDefaultFile] = useState('clouds.jpg');
   const [isLoading, setIsLoading] = useState(false);
-  const [inputMode, setInputMode] = useState('stl'); // 'stl' or 'image'
+  const [inputMode, setInputMode] = useState('image'); // 'stl' or 'image'
   const [loadedImages, setLoadedImages] = useState([]); // Track loaded images for the file list
   const [edgeSettings, setEdgeSettings] = useState({
     threshold: 0.1,
@@ -86,18 +89,22 @@ function App() {
     shadingColors: 1
   });
   const [applyDithering, setApplyDithering] = useState(false);
-  const [viewMode, setViewMode] = useState('3d'); // '3d' or 'svg'
+  const [ditheringResolution, setDitheringResolution] = useState(500); // Resolution for dithering (1-1000)
+  const [viewMode, setViewMode] = useState('svg'); // '3d' or 'svg' - start with svg for images
   const [isDragging, setIsDragging] = useState(false);
+  const [initialScale, setInitialScale] = useState(0.5); // Start with a smaller default scale
   const canvasRef = useRef(null);
   const exportTriggerRef = useRef(0);
   const dragCounterRef = useRef(0);
   const loadedImagesRef = useRef([]);
+  const previewContainerRef = useRef(null);
 
   const handleFileUpload = (file, mode, isExistingSelection = false) => {
     setIsLoading(true);
     setMeshData(null); // Clear previous mesh data
     setImageData(null); // Clear previous image data
     setImagePreviewUrl(null); // Clear previous image preview
+    setProcessedPreviewUrl(null); // Clear processed preview
     setGeneratedSVG(null); // Clear previous SVG
     
     if (mode === 'image') {
@@ -170,11 +177,75 @@ function App() {
     }
   };
 
+  // Calculate initial scale to fit image in viewport with padding
+  const calculateInitialScale = (imageWidth, imageHeight) => {
+    if (!imageWidth || !imageHeight) {
+      return 0.5;
+    }
+    
+    // Get container dimensions
+    const container = document.querySelector('.canvas-container');
+    if (!container) {
+      return 0.5;
+    }
+    
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+    
+    if (!containerWidth || !containerHeight) {
+      return 0.5;
+    }
+    
+    // Add padding (40px on each side = 80px total)
+    const padding = 80;
+    const availableWidth = containerWidth - padding;
+    const availableHeight = containerHeight - padding;
+    
+    if (availableWidth <= 0 || availableHeight <= 0) {
+      return 0.5;
+    }
+    
+    const imageAspect = imageWidth / imageHeight;
+    const containerAspect = availableWidth / availableHeight;
+    
+    let scale;
+    if (imageAspect > containerAspect) {
+      // Image is wider - fit to width
+      scale = availableWidth / imageWidth;
+    } else {
+      // Image is taller - fit to height
+      scale = availableHeight / imageHeight;
+    }
+    
+    // Ensure the image is fully visible with some margin
+    // Use 95% of calculated scale to add a bit more breathing room
+    scale = scale * 0.95;
+    
+    // Clamp between 0.01 and 1 to ensure it's visible but not too small
+    return Math.max(0.01, Math.min(1, scale));
+  };
+
   const handleImageLoaded = (data) => {
     setImageData(data);
     setIsLoading(false);
     // Automatically switch to 2D mode when image loads
     setViewMode('svg');
+    
+    // Calculate initial scale to fit the image
+    if (data && data.width && data.height) {
+      // Calculate scale immediately, then recalculate after a short delay when container is ready
+      const calculateScale = () => {
+        const scale = calculateInitialScale(data.width, data.height);
+        setInitialScale(scale);
+      };
+      
+      // Try immediately first
+      calculateScale();
+      
+      // Then recalculate after container is rendered
+      setTimeout(calculateScale, 100);
+      setTimeout(calculateScale, 300); // Extra check after layout
+    }
     
     // Create preview URL immediately for instant display
     if (data && data.texture && data.texture.image) {
@@ -189,32 +260,108 @@ function App() {
     }
   };
 
-  // Generate SVG when image data is available (async, non-blocking)
+  // Recalculate initial scale when window resizes or image loads
+  useEffect(() => {
+    if (!imageData || !imageData.width || !imageData.height) return;
+    
+    const recalculateScale = () => {
+      const scale = calculateInitialScale(imageData.width, imageData.height);
+      setInitialScale(scale);
+    };
+    
+    // Calculate immediately
+    recalculateScale();
+    
+    // Also recalculate after a delay to ensure container is fully rendered
+    const timeout1 = setTimeout(recalculateScale, 50);
+    const timeout2 = setTimeout(recalculateScale, 200);
+    const timeout3 = setTimeout(recalculateScale, 500);
+    
+    const handleResize = () => {
+      recalculateScale();
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      clearTimeout(timeout1);
+      clearTimeout(timeout2);
+      clearTimeout(timeout3);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [imageData]);
+
+  // Generate preview image when image data or dithering settings change (fast preview)
+  // This only generates a preview image, NOT SVG
   useEffect(() => {
     if (inputMode === 'image' && imageData && imageData.texture && imageData.texture.image) {
-      // Generate SVG asynchronously to not block UI
-      const generateSVG = () => {
-        // Use a reasonable default size for the SVG
-        const svgWidth = 800;
-        const svgHeight = 800;
-        const svgString = exportImageToSVG(imageData.texture, null, {
-          width: svgWidth,
-          height: svgHeight,
-          imageWidth: imageData.width,
-          imageHeight: imageData.height,
-          applyDithering
-        });
-        setGeneratedSVG(svgString);
+      const generatePreview = () => {
+        try {
+          // For dithering, downsample first, then apply dithering, then scale back up for display
+          let processWidth = imageData.width;
+          let processHeight = imageData.height;
+          let scaleFactor = 1;
+          
+          if (applyDithering) {
+            // Downsample to dithering resolution before processing
+            const targetDimension = ditheringResolution;
+            if (imageData.width > targetDimension || imageData.height > targetDimension) {
+              if (imageData.width > imageData.height) {
+                scaleFactor = targetDimension / imageData.width;
+                processWidth = targetDimension;
+                processHeight = Math.round(imageData.height * scaleFactor);
+              } else {
+                scaleFactor = targetDimension / imageData.height;
+                processHeight = targetDimension;
+                processWidth = Math.round(imageData.width * scaleFactor);
+              }
+            }
+          }
+          
+          // Create a temporary canvas for processing
+          const processCanvas = document.createElement('canvas');
+          processCanvas.width = processWidth;
+          processCanvas.height = processHeight;
+          const processCtx = processCanvas.getContext('2d');
+          
+          // Draw the image to the processing canvas (downsampled if dithering)
+          processCtx.drawImage(imageData.texture.image, 0, 0, processWidth, processHeight);
+          
+          // Apply dithering if requested (on downsampled image)
+          if (applyDithering) {
+            const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
+            const ditheredData = applyFloydSteinbergDithering(imageDataObj, 2);
+            processCtx.putImageData(ditheredData, 0, 0);
+          }
+          
+          // Create display canvas (original size for preview)
+          const displayCanvas = document.createElement('canvas');
+          displayCanvas.width = imageData.width;
+          displayCanvas.height = imageData.height;
+          const displayCtx = displayCanvas.getContext('2d');
+          
+          // Scale the processed image back up to original size for display
+          displayCtx.drawImage(processCanvas, 0, 0, imageData.width, imageData.height);
+          
+          // Convert to data URL for preview
+          const previewUrl = displayCanvas.toDataURL('image/png');
+          setProcessedPreviewUrl(previewUrl);
+        } catch (error) {
+          console.error('Error generating preview:', error);
+        }
       };
       
-      // Use requestIdleCallback if available, otherwise setTimeout
+      // Generate preview immediately (fast, non-blocking)
       if (window.requestIdleCallback) {
-        requestIdleCallback(generateSVG, { timeout: 1000 });
+        requestIdleCallback(generatePreview, { timeout: 500 });
       } else {
-        setTimeout(generateSVG, 0);
+        setTimeout(generatePreview, 0);
       }
+    } else {
+      // Clear processed preview if no image
+      setProcessedPreviewUrl(null);
     }
-  }, [inputMode, imageData, applyDithering]);
+  }, [inputMode, imageData, applyDithering, ditheringResolution]);
 
 
   const handleDefaultFileSelect = React.useCallback(async (filename) => {
@@ -237,17 +384,41 @@ function App() {
     try {
       const url = isImage ? getImageFileURL(filename) : getSTLFileURL(filename);
       console.log(`Loading ${isImage ? 'image' : 'STL'} from: ${url}`);
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        // Add cache control to avoid stale responses
+        cache: 'no-cache',
+        // Add headers that might help with Chrome
+        headers: {
+          'Accept': isImage ? 'image/*' : 'application/octet-stream'
+        }
+      });
       
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`HTTP ${response.status} error loading ${filename} from ${url}:`, errorText);
         setIsLoading(false);
-        alert(`Could not load ${filename} (HTTP ${response.status}). Please check the console for details.`);
+        alert(`Could not load ${filename} (HTTP ${response.status}). The file may not exist on GitHub. Please check the console for details.`);
         return;
       }
 
       const blob = await response.blob();
+      
+      // Check content-type for images
+      if (isImage) {
+        const blobType = blob.type;
+        if (!blobType || !blobType.startsWith('image/')) {
+          // Might be HTML error page, check first bytes
+          const firstBytes = await blob.slice(0, 100).text();
+          if (firstBytes.trim().toLowerCase().startsWith('<!doctype') || 
+              firstBytes.trim().toLowerCase().startsWith('<html')) {
+            console.error(`Received HTML instead of image. URL: ${url}`);
+            console.error(`HTML preview:`, firstBytes.substring(0, 500));
+            setIsLoading(false);
+            alert(`Received HTML error page instead of image for ${filename}. The file may not exist on GitHub. Check console for details.`);
+            return;
+          }
+        }
+      }
       
       // Validate blob size
       if (blob.size < 1000) {
@@ -260,15 +431,17 @@ function App() {
         return;
       }
 
-      // Check if it's actually HTML (error page)
-      const firstBytes = await blob.slice(0, 100).text();
-      if (firstBytes.trim().toLowerCase().startsWith('<!doctype') || 
-          firstBytes.trim().toLowerCase().startsWith('<html')) {
-        console.error(`Received HTML instead of file. URL: ${url}`);
-        console.error(`HTML preview:`, firstBytes.substring(0, 500));
-        setIsLoading(false);
-        alert(`Received HTML error page instead of file for ${filename}. Check console for details.`);
-        return;
+      // Check if it's actually HTML (error page) - for non-images
+      if (!isImage) {
+        const firstBytes = await blob.slice(0, 100).text();
+        if (firstBytes.trim().toLowerCase().startsWith('<!doctype') || 
+            firstBytes.trim().toLowerCase().startsWith('<html')) {
+          console.error(`Received HTML instead of file. URL: ${url}`);
+          console.error(`HTML preview:`, firstBytes.substring(0, 500));
+          setIsLoading(false);
+          alert(`Received HTML error page instead of file for ${filename}. Check console for details.`);
+          return;
+        }
       }
 
       if (isImage) {
@@ -344,9 +517,9 @@ function App() {
     }
   };
 
-  // Load default STL file on mount
+  // Load default file on mount
   useEffect(() => {
-    handleDefaultFileSelect('24_cell_Schlegel.stl');
+    handleDefaultFileSelect('clouds.jpg');
   }, [handleDefaultFileSelect]);
 
   // Cleanup thumbnail URLs on unmount
@@ -363,10 +536,44 @@ function App() {
 
   const handleGenerateSVG = () => {
     if (inputMode === 'image' && imageData) {
-      // Generate SVG from image
-      exportTriggerRef.current += 1;
-      if (window.generateImageSVG) {
-        window.generateImageSVG();
+      // Generate actual vector SVG from image (async to prevent UI freeze)
+      setIsLoading(true);
+      
+      // Use requestIdleCallback or setTimeout with chunked processing
+      const generateSVGAsync = () => {
+        try {
+          const svgWidth = imageData.width;
+          const svgHeight = imageData.height;
+          
+          console.log('Starting SVG generation...');
+          const startTime = performance.now();
+          
+          const svgString = exportImageToSVG(imageData.texture, null, {
+            width: svgWidth,
+            height: svgHeight,
+            imageWidth: imageData.width,
+            imageHeight: imageData.height,
+            applyDithering,
+            ditheringResolution: applyDithering ? ditheringResolution : undefined
+          });
+          
+          const endTime = performance.now();
+          console.log(`SVG generation took ${((endTime - startTime) / 1000).toFixed(2)} seconds`);
+          
+          setGeneratedSVG(svgString);
+        } catch (error) {
+          console.error('Error generating SVG:', error);
+          alert('Error generating SVG: ' + error.message);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+      
+      // Use requestIdleCallback if available for better performance
+      if (window.requestIdleCallback) {
+        requestIdleCallback(generateSVGAsync, { timeout: 2000 });
+      } else {
+        setTimeout(generateSVGAsync, 100);
       }
     } else if (inputMode === 'stl' && meshData) {
       // Generate SVG from STL
@@ -411,39 +618,6 @@ function App() {
         currentImageFileName={imageFile?.name}
       />
       <div className="canvas-container">
-        {/* View Mode Toggle Switch */}
-        {inputMode !== 'image' && (
-          <div className="view-mode-toggle">
-            <button
-              className={`toggle-button ${viewMode === '3d' ? 'active' : ''}`}
-              onClick={() => setViewMode('3d')}
-              title="3D View"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-                <line x1="12" y1="22.08" x2="12" y2="12"></line>
-              </svg>
-              <span>3D</span>
-            </button>
-            <button
-              className={`toggle-button ${viewMode === 'svg' ? 'active' : ''}`}
-              onClick={() => setViewMode('svg')}
-              disabled={!generatedSVG}
-              title="2D Preview"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-                <polyline points="7.5 4.21 12 6.81 16.5 4.21"></polyline>
-                <polyline points="7.5 19.79 7.5 14.6 3 12"></polyline>
-                <polyline points="21 12 16.5 14.6 16.5 19.79"></polyline>
-                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-                <line x1="12" y1="22.08" x2="12" y2="12"></line>
-              </svg>
-              <span>2D</span>
-            </button>
-          </div>
-        )}
 
         {isLoading && (
           <div className="loading-overlay">
@@ -452,8 +626,8 @@ function App() {
           </div>
         )}
 
-        {/* 3D View - Only show for STL files */}
-        {viewMode === '3d' && inputMode === 'stl' && stlFile && (
+        {/* 3D View - Always show for STL files */}
+        {inputMode === 'stl' && stlFile && (
           <Canvas key="stl-canvas" ref={canvasRef} gl={{ preserveDrawingBuffer: true }}>
             <PerspectiveCamera makeDefault position={[0, 0, 5]} />
             <ambientLight intensity={0.5} />
@@ -506,23 +680,59 @@ function App() {
             {/* Show image immediately, then replace with SVG when ready */}
             {generatedSVG ? (
               <div className="svg-preview-view">
-                <div 
-                  className="svg-preview-content"
-                  dangerouslySetInnerHTML={{ __html: generatedSVG }}
-                />
+                <TransformWrapper
+                  initialScale={1}
+                  minScale={0.1}
+                  maxScale={10}
+                  wheel={{ step: 0.1 }}
+                  doubleClick={{ disabled: false, mode: 'reset' }}
+                  pan={{ disabled: false }}
+                  zoom={{ disabled: false }}
+                  centerOnInit={true}
+                  limitToBounds={false}
+                >
+                  <TransformComponent
+                    wrapperClass="svg-preview-content"
+                    contentClass="svg-preview-inner"
+                  >
+                    <div dangerouslySetInnerHTML={{ __html: generatedSVG }} />
+                  </TransformComponent>
+                </TransformWrapper>
               </div>
-            ) : imagePreviewUrl ? (
-              <div className="svg-preview-view">
-                <img 
-                  src={imagePreviewUrl} 
-                  alt="Preview" 
-                  style={{ 
-                    maxWidth: '100%', 
-                    maxHeight: '100%', 
-                    objectFit: 'contain',
-                    display: 'block'
-                  }} 
-                />
+            ) : (processedPreviewUrl || imagePreviewUrl) ? (
+              <div className="svg-preview-view" ref={previewContainerRef}>
+                <TransformWrapper
+                  initialScale={initialScale}
+                  minScale={0.01}
+                  maxScale={10}
+                  wheel={{ step: 0.1 }}
+                  doubleClick={{ disabled: false, mode: 'reset' }}
+                  pan={{ disabled: false }}
+                  zoom={{ disabled: false }}
+                  centerOnInit={true}
+                  limitToBounds={false}
+                  initialPositionX={0}
+                  initialPositionY={0}
+                >
+                  <TransformComponent
+                    wrapperClass="svg-preview-content"
+                    contentClass="svg-preview-inner"
+                  >
+                    <img 
+                      src={processedPreviewUrl || imagePreviewUrl} 
+                      alt="Preview" 
+                      width={imageData?.width}
+                      height={imageData?.height}
+                      style={{ 
+                        maxWidth: 'none',
+                        maxHeight: 'none',
+                        width: 'auto',
+                        height: 'auto',
+                        display: 'block'
+                      }} 
+                    />
+                  </TransformComponent>
+                </TransformWrapper>
               </div>
             ) : (
               <div className="svg-preview-empty">
@@ -532,21 +742,6 @@ function App() {
           </>
         )}
 
-        {/* SVG Preview View - For STL files */}
-        {viewMode === 'svg' && inputMode === 'stl' && generatedSVG && (
-          <div className="svg-preview-view">
-            <div 
-              className="svg-preview-content"
-              dangerouslySetInnerHTML={{ __html: generatedSVG }}
-            />
-          </div>
-        )}
-
-        {viewMode === 'svg' && inputMode === 'stl' && !generatedSVG && (
-          <div className="svg-preview-empty">
-            <p>Generate an SVG preview first</p>
-          </div>
-        )}
       </div>
       <ExportPanel
         onGenerateSVG={handleGenerateSVG}
@@ -556,9 +751,20 @@ function App() {
         hasImage={!!imageData}
         inputMode={inputMode}
         edgeSettings={edgeSettings}
-        onEdgeSettingsChange={setEdgeSettings}
+        onEdgeSettingsChange={(newSettings) => {
+          setEdgeSettings(newSettings);
+          setGeneratedSVG(null); // Clear SVG when settings change
+        }}
         applyDithering={applyDithering}
-        onDitheringChange={setApplyDithering}
+        onDitheringChange={(enabled) => {
+          setApplyDithering(enabled);
+          setGeneratedSVG(null); // Clear SVG when dithering changes
+        }}
+        ditheringResolution={ditheringResolution}
+        onDitheringResolutionChange={(resolution) => {
+          setDitheringResolution(resolution);
+          setGeneratedSVG(null); // Clear SVG when resolution changes
+        }}
       />
     </div>
   );

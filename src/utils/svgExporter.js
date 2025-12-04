@@ -879,7 +879,106 @@ function getDepthColor(depth, minDepth, maxDepth, numColors, baseColor) {
 }
 
 /**
- * Export an image texture to SVG with optional dithering
+ * Convert RGB to hex color
+ */
+function rgbToHex(r, g, b) {
+  return `#${[r, g, b].map(x => {
+    const hex = x.toString(16);
+    return hex.length === 1 ? '0' + hex : hex;
+  }).join('')}`;
+}
+
+/**
+ * Merge adjacent rectangles of the same color (union and flatten)
+ * This significantly reduces file size by combining pixel-level rectangles into larger shapes
+ */
+function mergeRectangles(rects) {
+  if (rects.length === 0) return [];
+  
+  // Round coordinates to avoid floating point issues
+  const normalizedRects = rects.map(r => ({
+    x: Math.round(r.x * 100) / 100,
+    y: Math.round(r.y * 100) / 100,
+    width: Math.round(r.width * 100) / 100,
+    height: Math.round(r.height * 100) / 100
+  }));
+  
+  // Sort by y, then x for efficient row-based merging
+  normalizedRects.sort((a, b) => {
+    if (Math.abs(a.y - b.y) < 0.01) {
+      return a.x - b.x;
+    }
+    return a.y - b.y;
+  });
+  
+  // Step 1: Merge horizontally adjacent rectangles on the same row
+  const horizontallyMerged = [];
+  let current = null;
+  
+  for (const rect of normalizedRects) {
+    if (!current) {
+      current = { ...rect };
+      continue;
+    }
+    
+    // Check if rectangles are on the same row and adjacent horizontally
+    const sameRow = Math.abs(current.y - rect.y) < 0.01;
+    const sameHeight = Math.abs(current.height - rect.height) < 0.01;
+    const adjacent = Math.abs((current.x + current.width) - rect.x) < 0.01;
+    
+    if (sameRow && sameHeight && adjacent) {
+      // Merge horizontally by extending width
+      current.width += rect.width;
+    } else {
+      // Can't merge, save current and start new
+      horizontallyMerged.push(current);
+      current = { ...rect };
+    }
+  }
+  if (current) {
+    horizontallyMerged.push(current);
+  }
+  
+  // Step 2: Merge vertically adjacent rectangles with same x and width
+  horizontallyMerged.sort((a, b) => {
+    if (Math.abs(a.x - b.x) < 0.01) {
+      return a.y - b.y;
+    }
+    return a.x - b.x;
+  });
+  
+  const fullyMerged = [];
+  current = null;
+  
+  for (const rect of horizontallyMerged) {
+    if (!current) {
+      current = { ...rect };
+      continue;
+    }
+    
+    // Check if rectangles are in the same column and adjacent vertically
+    const sameColumn = Math.abs(current.x - rect.x) < 0.01;
+    const sameWidth = Math.abs(current.width - rect.width) < 0.01;
+    const adjacent = Math.abs((current.y + current.height) - rect.y) < 0.01;
+    
+    if (sameColumn && sameWidth && adjacent) {
+      // Merge vertically by extending height
+      current.height += rect.height;
+    } else {
+      // Can't merge, save current and start new
+      fullyMerged.push(current);
+      current = { ...rect };
+    }
+  }
+  if (current) {
+    fullyMerged.push(current);
+  }
+  
+  return fullyMerged;
+}
+
+/**
+ * Export an image texture to SVG with pixels as vector dots/circles
  */
 export function exportImageToSVG(texture, renderer, options = {}) {
   const {
@@ -887,12 +986,14 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     height = 800,
     imageWidth = 800,
     imageHeight = 800,
-    applyDithering = false
+    applyDithering = false,
+    ditheringResolution = 500
   } = options;
 
-  // Create SVG header
+  // Create SVG header with white background
   let svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect width="${width}" height="${height}" fill="white"/>
 `;
 
   if (!texture || !texture.image) {
@@ -901,33 +1002,179 @@ export function exportImageToSVG(texture, renderer, options = {}) {
   }
 
   try {
-    // Create a temporary canvas to render the texture
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = imageWidth;
-    tempCanvas.height = imageHeight;
-    const tempCtx = tempCanvas.getContext('2d');
+    let processWidth = imageWidth;
+    let processHeight = imageHeight;
+    let scaleFactor = 1;
     
-    // Draw the image to the canvas
-    tempCtx.drawImage(texture.image, 0, 0, imageWidth, imageHeight);
-    
-    // Get ImageData
-    const imageData = tempCtx.getImageData(0, 0, imageWidth, imageHeight);
-    
-    // Apply dithering if requested
-    let processedImageData = imageData;
+    // For dithered images: downsample to dithering resolution BEFORE dithering
     if (applyDithering) {
-      console.log('Applying Floyd-Steinberg dithering to image...');
-      processedImageData = applyFloydSteinbergDithering(imageData, 2);
-      
-      // Update canvas with dithered image
-      tempCtx.putImageData(processedImageData, 0, 0);
+      const targetDimension = ditheringResolution;
+      if (imageWidth > targetDimension || imageHeight > targetDimension) {
+        if (imageWidth > imageHeight) {
+          scaleFactor = targetDimension / imageWidth;
+          processWidth = targetDimension;
+          processHeight = Math.round(imageHeight * scaleFactor);
+        } else {
+          scaleFactor = targetDimension / imageHeight;
+          processHeight = targetDimension;
+          processWidth = Math.round(imageWidth * scaleFactor);
+        }
+        console.log(`Downsampling to ${processWidth}x${processHeight} before dithering (resolution: ${targetDimension}px)`);
+      }
+    } else {
+      // For non-dithered images: limit to prevent browser freeze
+      const maxDimension = 1000;
+      if (imageWidth > maxDimension || imageHeight > maxDimension) {
+        if (imageWidth > imageHeight) {
+          scaleFactor = maxDimension / imageWidth;
+          processWidth = maxDimension;
+          processHeight = Math.round(imageHeight * scaleFactor);
+        } else {
+          scaleFactor = maxDimension / imageHeight;
+          processHeight = maxDimension;
+          processWidth = Math.round(imageWidth * scaleFactor);
+        }
+        console.log(`Downsampling from ${imageWidth}x${imageHeight} to ${processWidth}x${processHeight}`);
+      }
     }
     
-    // Convert to base64 data URL
-    const imageDataUrl = tempCanvas.toDataURL('image/png');
+    // Create a temporary canvas to render the texture
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = processWidth;
+    tempCanvas.height = processHeight;
+    const tempCtx = tempCanvas.getContext('2d');
     
-    // Embed image in SVG
-    svg += `  <image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet"/>\n`;
+    // Draw the image to the canvas (downsampled if needed)
+    tempCtx.drawImage(texture.image, 0, 0, processWidth, processHeight);
+    
+    // Get ImageData
+    const imageData = tempCtx.getImageData(0, 0, processWidth, processHeight);
+    
+    // Apply dithering if requested (on the downsampled image)
+    let processedImageData = imageData;
+    if (applyDithering) {
+      console.log(`Applying Floyd-Steinberg dithering to ${processWidth}x${processHeight} image...`);
+      processedImageData = applyFloydSteinbergDithering(imageData, 2);
+    }
+    
+    const data = processedImageData.data;
+    const pixels = [];
+    
+    // Convert pixels to vector dots
+    // Configuration - different for dithered vs non-dithered
+    let dotRadius, brightnessThreshold, minAlpha, maxDots, stepSize;
+    
+    if (applyDithering) {
+      // For dithered images: MUST process every pixel to preserve the error-diffused pattern
+      // Dithering creates an organic pattern that will be lost with grid sampling
+      // We'll generate black rectangles for dark pixels, nothing for light pixels
+      brightnessThreshold = 250; // Only skip pure white (255)
+      minAlpha = 128;
+      maxDots = 1000000; // Higher limit since we need to capture the pattern
+      // CRITICAL: Always use stepSize = 1 for dithered images to preserve the pattern
+      // The dithering algorithm already created the optimal pattern, we just need to capture it
+      stepSize = 1; // Process every pixel - this is essential for dithered images
+      console.log(`Dithered image: ${processWidth}x${processHeight}, processing every pixel (stepSize=1)`);
+    } else {
+      // For non-dithered images: use sampling to reduce dots
+      dotRadius = 0.6;
+      brightnessThreshold = 245;
+      minAlpha = 128;
+      maxDots = 500000;
+      // Use step size to skip pixels for very large images
+      stepSize = Math.max(1, Math.ceil(Math.sqrt((processWidth * processHeight) / maxDots)));
+    }
+    
+    for (let y = 0; y < processHeight; y += stepSize) {
+      for (let x = 0; x < processWidth; x += stepSize) {
+        // Stop if we've reached max dots
+        if (pixels.length >= maxDots) {
+          console.warn(`Reached maximum dot limit of ${maxDots}, stopping early`);
+          break;
+        }
+        
+        const idx = (y * processWidth + x) * 4;
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        const a = data[idx + 3];
+        
+        // Skip transparent or very transparent pixels
+        if (a < minAlpha) continue;
+        
+        // Calculate brightness
+        const brightness = (r + g + b) / 3;
+        
+        // Skip very light pixels (almost white background)
+        if (brightness > brightnessThreshold) continue;
+        
+        // Scale coordinates back to original size if downsampled
+        const scaledX = x / scaleFactor;
+        const scaledY = y / scaleFactor;
+        const pixelSize = 1 / scaleFactor; // Size of each pixel in SVG coordinates
+        
+        if (applyDithering) {
+          // For dithered images: generate black rectangles for dark pixels
+          // Skip light pixels (they're the white background)
+          const color = rgbToHex(r, g, b);
+          pixels.push({
+            x: scaledX,
+            y: scaledY,
+            width: pixelSize,
+            height: pixelSize,
+            color: color,
+            isRect: true
+          });
+        } else {
+          // For non-dithered images: use dots
+          const color = rgbToHex(r, g, b);
+          pixels.push({
+            x: scaledX + 0.5 / scaleFactor,
+            y: scaledY + 0.5 / scaleFactor,
+            color: color,
+            isRect: false
+          });
+        }
+      }
+      if (pixels.length >= maxDots) break;
+    }
+    
+    console.log(`Converting ${pixels.length} pixels to vector dots (step size: ${stepSize})...`);
+    
+    // Group pixels by color for optimization (reduces file size)
+    const dotsByColor = new Map();
+    pixels.forEach(pixel => {
+      if (!dotsByColor.has(pixel.color)) {
+        dotsByColor.set(pixel.color, []);
+      }
+      dotsByColor.get(pixel.color).push(pixel);
+    });
+    
+    // Add shapes to SVG, grouped by color for efficiency
+    // Build SVG string in chunks to avoid memory issues
+    dotsByColor.forEach((dots, color) => {
+      svg += `  <g fill="${color}" stroke="none">\n`;
+      
+      if (dots.length > 0 && dots[0].isRect) {
+        // For dithered images: merge rectangles of same color
+        console.log(`Merging ${dots.length} rectangles for color ${color}...`);
+        const mergedRects = mergeRectangles(dots);
+        console.log(`Merged to ${mergedRects.length} rectangles (${((1 - mergedRects.length / dots.length) * 100).toFixed(1)}% reduction)`);
+        
+        // Convert merged rectangles to paths and flatten
+        mergedRects.forEach(rect => {
+          svg += `    <rect x="${rect.x.toFixed(2)}" y="${rect.y.toFixed(2)}" width="${rect.width.toFixed(2)}" height="${rect.height.toFixed(2)}"/>\n`;
+        });
+      } else {
+        // For non-dithered images: use circles (no merging needed)
+        dots.forEach(dot => {
+          svg += `    <circle cx="${dot.x.toFixed(1)}" cy="${dot.y.toFixed(1)}" r="${(dotRadius / scaleFactor).toFixed(2)}"/>\n`;
+        });
+      }
+      svg += `  </g>\n`;
+    });
+    
+    console.log(`Generated SVG with ${pixels.length} dots in ${dotsByColor.size} color groups`);
     
   } catch (error) {
     console.error('Error exporting image to SVG:', error);

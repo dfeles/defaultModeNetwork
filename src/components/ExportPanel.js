@@ -1,21 +1,14 @@
 import React from 'react';
 import './ExportPanel.css';
 
-function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange }) {
+function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange, ditheringResolution, onDitheringResolutionChange }) {
   const hasContent = hasMesh || hasImage;
 
   return (
     <div className="export-panel">
-      <div className="panel-section">
-        <h2>Export</h2>
-        <p className="subtitle">SVG Generation</p>
-      </div>
-
       {/* Settings Panel - Only show when 3D is loaded */}
       {hasMesh && inputMode === 'stl' && (
         <div className="panel-section">
-          <h3>Settings</h3>
-          
           <div className="control-group">
             <label>
               Edge Threshold
@@ -101,6 +94,25 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
             </label>
             <small>Apply Floyd-Steinberg dithering to create a stylized halftone effect</small>
           </div>
+          
+          {/* Dithering Settings - Only show when dithering is enabled */}
+          {applyDithering && hasImage && (
+            <div className="control-group" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #1a1a1a' }}>
+              <label>
+                Resolution
+                <input
+                  type="range"
+                  min="1"
+                  max="1000"
+                  step="1"
+                  value={ditheringResolution}
+                  onChange={(e) => onDitheringResolutionChange(parseInt(e.target.value))}
+                />
+                <span className="value-display">{ditheringResolution}px</span>
+              </label>
+              <small>Image is downsampled to this resolution before dithering is applied. Lower values = faster processing, less detail.</small>
+            </div>
+          )}
         </div>
       )}
 
@@ -115,6 +127,11 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
         {!hasContent && (
           <p className="hint">Load a file first</p>
         )}
+        {hasContent && inputMode === 'image' && (
+          <p className="hint" style={{ marginTop: '8px', fontSize: '11px', color: '#666' }}>
+            Preview updates automatically. Click "Generate SVG" to create vector format.
+          </p>
+        )}
       </div>
       
       {generatedSVG && (
@@ -128,11 +145,18 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
               const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(2);
               const sizeDisplay = fileSize > 1024 * 1024 ? `${fileSizeMB} MB` : `${fileSizeKB} KB`;
               
-              // Count paths/shapes
+              // Count paths/shapes (including images, paths, circles, rects, etc.)
               const parser = new DOMParser();
               const svgDoc = parser.parseFromString(generatedSVG, 'image/svg+xml');
               const paths = svgDoc.querySelectorAll('path');
-              const shapeCount = paths.length;
+              const images = svgDoc.querySelectorAll('image');
+              const circles = svgDoc.querySelectorAll('circle');
+              const rects = svgDoc.querySelectorAll('rect');
+              const polygons = svgDoc.querySelectorAll('polygon');
+              const polylines = svgDoc.querySelectorAll('polyline');
+              const ellipses = svgDoc.querySelectorAll('ellipse');
+              const shapeCount = paths.length + images.length + circles.length + rects.length + 
+                                polygons.length + polylines.length + ellipses.length;
               
               return (
                 <>
@@ -153,7 +177,7 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
             className="save-button"
             onClick={onSaveSVG}
           >
-            Save SVG File
+            Download
           </button>
         </div>
       )}

@@ -25,10 +25,10 @@ function ControlPanel({ onFileUpload, inputMode, selectedDefaultFile, onDefaultF
   };
 
   const defaultFiles = [
+    { value: 'clouds.jpg', label: 'Clouds', type: 'image', thumbnailUrl: '/clouds.jpg' },
     { value: '24_cell_Schlegel.stl', label: '24-Cell (Schlegel)', type: 'stl' },
     { value: '120_Cell.stl', label: '120-Cell', type: 'stl' },
-    { value: '600_cell.stl', label: '600-Cell', type: 'stl' },
-    { value: 'clouds.jpg', label: 'Clouds', type: 'image' }
+    { value: '600_cell.stl', label: '600-Cell', type: 'stl' }
   ];
 
   const handleFileListItemClick = (fileEntry) => {
@@ -50,13 +50,6 @@ function ControlPanel({ onFileUpload, inputMode, selectedDefaultFile, onDefaultF
   return (
     <div className="control-panel">
       <div className="panel-section">
-        <h2>STL to SVG Converter</h2>
-        <p className="subtitle">Shader-based edge detection</p>
-      </div>
-
-      <div className="panel-section">
-        <h3>Import</h3>
-        
         <label className="file-upload-button">
           <input
             type="file"
@@ -100,13 +93,21 @@ function ControlPanel({ onFileUpload, inputMode, selectedDefaultFile, onDefaultF
                 className={`file-list-item ${selectedDefaultFile === file.value ? 'active' : ''}`}
                 onClick={() => handleFileListItemClick(file)}
               >
-                <div className="file-list-icon">
-                  {file.type === 'image' ? (
-                    <ImageIcon size={16} />
-                  ) : (
-                    <Box size={16} />
-                  )}
-                </div>
+                {file.thumbnailUrl ? (
+                  <img 
+                    src={file.thumbnailUrl} 
+                    alt={file.label}
+                    className="file-list-thumbnail"
+                  />
+                ) : (
+                  <div className="file-list-icon">
+                    {file.type === 'image' ? (
+                      <ImageIcon size={16} />
+                    ) : (
+                      <Box size={16} />
+                    )}
+                  </div>
+                )}
                 <span className="file-list-name">{file.label}</span>
               </div>
             ))}
