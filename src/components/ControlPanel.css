@@ -7,6 +7,7 @@
   border-right: 1px solid #1a1a1a;
   scrollbar-width: thin;
   scrollbar-color: #333 #111;
+  transition: width 0.3s ease, padding 0.3s ease;
 }
 
 .control-panel::-webkit-scrollbar {
@@ -57,7 +58,9 @@
 }
 
 .file-upload-button {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 12px 20px;
   background: #1a1a1a;
   color: #ffffff;
@@ -69,6 +72,18 @@
   font-size: 14px;
   transition: all 0.2s ease;
   width: 100%;
+  gap: 8px;
+  position: relative;
+}
+
+.file-upload-text {
+  transition: opacity 0.3s ease, width 0.3s ease;
+}
+
+.file-upload-icon {
+  display: none;
+  flex-shrink: 0;
+  transition: opacity 0.3s ease;
 }
 
 .file-upload-button:hover {
@@ -314,5 +329,158 @@
 .file-list-item.active .file-list-name {
   color: #ffffff;
   font-weight: 500;
+}
+
+/* Minimized mode for screens smaller than 1200px */
+@media (max-width: 1199px) {
+  .control-panel {
+    width: 80px;
+    min-width: 80px;
+    padding: 16px 8px;
+    overflow-y: auto;
+    /* Allow tooltips to overflow horizontally */
+    overflow-x: clip;
+  }
+
+  .panel-section {
+    position: relative;
+    overflow: visible;
+  }
+
+  .file-upload-button {
+    padding: 12px;
+    justify-content: center;
+    position: relative;
+    overflow: visible;
+  }
+
+  .file-upload-text {
+    display: none;
+  }
+
+  .file-upload-icon {
+    display: block;
+  }
+
+  .file-list-container {
+    margin-top: 12px;
+  }
+
+  .file-list {
+    /* Keep scrolling for long lists */
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  .file-list-item {
+    justify-content: center;
+    padding: 8px 0;
+    min-height: 48px;
+    position: relative;
+    overflow: visible;
+  }
+
+  .file-list-name {
+    display: none;
+  }
+
+  .file-list-icon,
+  .file-list-thumbnail {
+    width: 40px;
+    height: 40px;
+  }
+
+  .file-list-thumbnail {
+    border-radius: 6px;
+  }
+
+  .panel-section-controls {
+    display: none;
+  }
+
+  /* Tooltip styles for minimized mode */
+  .file-list-item::after {
+    content: attr(title);
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 50%;
+    transform: translateY(-50%);
+    background: #1a1a1a;
+    color: #ffffff;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+    z-index: 1000;
+    border: 1px solid #2a2a2a;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .file-list-item::before {
+    content: '';
+    position: absolute;
+    left: calc(100% + 4px);
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+    border-right: 6px solid #1a1a1a;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+    z-index: 1001;
+  }
+
+  .file-list-item:hover::after,
+  .file-list-item:hover::before {
+    opacity: 1;
+  }
+
+  .file-upload-button::after {
+    content: attr(title);
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 50%;
+    transform: translateY(-50%);
+    background: #1a1a1a;
+    color: #ffffff;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+    z-index: 1000;
+    border: 1px solid #2a2a2a;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .file-upload-button::before {
+    content: '';
+    position: absolute;
+    left: calc(100% + 4px);
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+    border-right: 6px solid #1a1a1a;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+    z-index: 1001;
+  }
+
+  .file-upload-button:hover::after,
+  .file-upload-button:hover::before {
+    opacity: 1;
+  }
 }
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image as ImageIcon, Box } from 'lucide-react';
+import { Image as ImageIcon, Box, Upload } from 'lucide-react';
 import './ControlPanel.css';
 
 function ControlPanel({ onFileUpload, inputMode, selectedDefaultFile, onDefaultFileSelect, loadedImages, currentImageFileName }) {
@@ -50,14 +50,15 @@ function ControlPanel({ onFileUpload, inputMode, selectedDefaultFile, onDefaultF
   return (
     <div className="control-panel">
       <div className="panel-section">
-        <label className="file-upload-button">
+        <label className="file-upload-button" title="Load STL or Image">
           <input
             type="file"
             accept=".stl,image/*"
             onChange={handleFileChange}
             style={{ display: 'none' }}
           />
-          Load STL or Image
+          <span className="file-upload-text">Load STL or Image</span>
+          <Upload className="file-upload-icon" size={20} />
         </label>
 
         <div className="file-list-container">
@@ -69,6 +70,7 @@ function ControlPanel({ onFileUpload, inputMode, selectedDefaultFile, onDefaultF
                 data-type="image"
                 className={`file-list-item ${inputMode === 'image' && currentImageFileName === imageEntry.name ? 'active' : ''}`}
                 onClick={() => handleFileListItemClick(imageEntry)}
+                title={imageEntry.name}
               >
                 {imageEntry.thumbnailUrl ? (
                   <img 
@@ -92,6 +94,7 @@ function ControlPanel({ onFileUpload, inputMode, selectedDefaultFile, onDefaultF
                 data-type={file.type}
                 className={`file-list-item ${selectedDefaultFile === file.value ? 'active' : ''}`}
                 onClick={() => handleFileListItemClick(file)}
+                title={file.label}
               >
                 {file.thumbnailUrl ? (
                   <img 
@@ -115,7 +118,7 @@ function ControlPanel({ onFileUpload, inputMode, selectedDefaultFile, onDefaultF
         </div>
       </div>
 
-      <div className="panel-section">
+      <div className="panel-section panel-section-controls">
         <h3>Controls</h3>
         <ul className="controls-list">
           <li><strong>Left Click + Drag:</strong> Rotate</li>

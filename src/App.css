@@ -225,70 +225,92 @@
   font-weight: 400;
 }
 
-/* Responsive layout for tablets and smaller screens */
-@media (max-width: 1200px) {
-  .app {
-    flex-direction: column;
-  }
-  
-  .canvas-container {
-    order: 1;
-    flex: 1;
-    min-height: 400px;
-  }
+/* Floating sidebar toggle buttons - hidden by default */
+.sidebar-toggle {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1000;
+  width: 48px;
+  height: 48px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-radius: 50%;
 }
 
-/* Stack panels horizontally at bottom on medium screens */
-@media (max-width: 1200px) and (min-width: 768px) {
-  .app {
-    flex-wrap: wrap;
-  }
-  
-  .control-panel,
-  .export-panel {
-    width: 50% !important;
-    min-width: 0 !important;
-    max-height: 40vh;
-    order: 2;
-    border: none !important;
-    border-top: 1px solid #1a1a1a !important;
-  }
-  
-  .canvas-container {
-    width: 100% !important;
-    height: 60vh !important;
-    order: 1;
-  }
+.sidebar-toggle:hover {
+  color: #ccc;
 }
 
-/* Full mobile layout */
-@media (max-width: 767px) {
-  .app {
-    flex-direction: column;
+.sidebar-toggle-left {
+  left: 16px;
+}
+
+.sidebar-toggle-right {
+  right: 16px;
+}
+
+/* Sidebar overlay for mobile */
+.sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(10, 10, 10, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: none;
+}
+
+.sidebar-overlay.active {
+  display: block;
+}
+
+.sidebar-content {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 320px;
+  max-width: 85vw;
+  background: #111111;
+  overflow-y: auto;
+  z-index: 2001;
+  box-shadow: 2px 0 20px rgba(0, 0, 0, 0.5);
+  transition: width 0.3s ease;
+}
+
+.sidebar-content-left {
+  left: 0;
+  border-right: 1px solid #1a1a1a;
+}
+
+.sidebar-content-right {
+  right: 0;
+  border-left: 1px solid #1a1a1a;
+}
+
+/* Small screens (< 1200px) - minimized sidebar always visible */
+@media (max-width: 1199px) {
+  /* Hide floating toggle buttons - sidebar is always visible */
+  .sidebar-toggle {
+    display: none !important;
   }
-  
-  .control-panel,
-  .export-panel {
-    width: 100% !important;
-    min-width: 0 !important;
-    max-height: 40vh;
-    border: none !important;
-    border-top: 1px solid #1a1a1a !important;
-    padding: 16px !important;
+
+  /* Hide overlay sidebars - use inline minimized sidebars instead */
+  .sidebar-overlay {
+    display: none !important;
   }
-  
-  .canvas-container {
-    width: 100% !important;
-    height: 50vh !important;
-    order: 1;
-  }
-  
-  .control-panel {
-    order: 2;
-  }
-  
-  .export-panel {
-    order: 3;
+
+  /* Minimize sidebar content in overlays if they're ever shown */
+  .sidebar-content {
+    width: 80px;
   }
 }
 

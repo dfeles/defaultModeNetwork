@@ -891,90 +891,625 @@ function rgbToHex(r, g, b) {
 /**
  * Merge adjacent rectangles of the same color (union and flatten)
  * This significantly reduces file size by combining pixel-level rectangles into larger shapes
+ * Uses iterative passes until no more merges are possible
  */
 function mergeRectangles(rects) {
   if (rects.length === 0) return [];
   
+  const EPSILON = 0.01; // Tolerance for floating point comparisons
+  const initialCount = rects.length;
+  
   // Round coordinates to avoid floating point issues
-  const normalizedRects = rects.map(r => ({
+  let merged = rects.map(r => ({
     x: Math.round(r.x * 100) / 100,
     y: Math.round(r.y * 100) / 100,
     width: Math.round(r.width * 100) / 100,
     height: Math.round(r.height * 100) / 100
   }));
   
-  // Sort by y, then x for efficient row-based merging
-  normalizedRects.sort((a, b) => {
-    if (Math.abs(a.y - b.y) < 0.01) {
+  let previousCount = merged.length;
+  let iterations = 0;
+  const maxIterations = 10; // Safety limit
+  
+  // Iterate until no more merges are possible
+  while (iterations < maxIterations) {
+    iterations++;
+    
+    // Pass 1: Merge horizontally (left to right)
+    merged = mergeHorizontally(merged, EPSILON);
+    
+    // Pass 2: Merge vertically (top to bottom)
+    merged = mergeVertically(merged, EPSILON);
+    
+    // Check if we made progress
+    if (merged.length === previousCount) {
+      // No more merges possible
+      break;
+    }
+    
+    previousCount = merged.length;
+  }
+  
+  if (iterations > 1) {
+    console.log(`  Completed ${iterations} merge iterations: ${initialCount} → ${merged.length} rectangles`);
+  }
+  
+  return merged;
+}
+
+/**
+ * Merge horizontally adjacent rectangles on the same row
+ */
+function mergeHorizontally(rects, epsilon) {
+  if (rects.length === 0) return [];
+  
+  // Sort by y (row), then x (column) for efficient row-based merging
+  const sorted = [...rects].sort((a, b) => {
+    if (Math.abs(a.y - b.y) < epsilon) {
       return a.x - b.x;
     }
     return a.y - b.y;
   });
   
-  // Step 1: Merge horizontally adjacent rectangles on the same row
-  const horizontallyMerged = [];
+  const merged = [];
   let current = null;
   
-  for (const rect of normalizedRects) {
+  for (const rect of sorted) {
     if (!current) {
       current = { ...rect };
       continue;
     }
     
     // Check if rectangles are on the same row and adjacent horizontally
-    const sameRow = Math.abs(current.y - rect.y) < 0.01;
-    const sameHeight = Math.abs(current.height - rect.height) < 0.01;
-    const adjacent = Math.abs((current.x + current.width) - rect.x) < 0.01;
+    const sameRow = Math.abs(current.y - rect.y) < epsilon;
+    const sameHeight = Math.abs(current.height - rect.height) < epsilon;
+    const adjacent = Math.abs((current.x + current.width) - rect.x) < epsilon;
     
     if (sameRow && sameHeight && adjacent) {
       // Merge horizontally by extending width
       current.width += rect.width;
     } else {
       // Can't merge, save current and start new
-      horizontallyMerged.push(current);
+      merged.push(current);
       current = { ...rect };
     }
   }
+  
   if (current) {
-    horizontallyMerged.push(current);
+    merged.push(current);
   }
   
-  // Step 2: Merge vertically adjacent rectangles with same x and width
-  horizontallyMerged.sort((a, b) => {
-    if (Math.abs(a.x - b.x) < 0.01) {
+  return merged;
+}
+
+/**
+ * Merge vertically adjacent rectangles in the same column
+ */
+function mergeVertically(rects, epsilon) {
+  if (rects.length === 0) return [];
+  
+  // Sort by x (column), then y (row) for efficient column-based merging
+  const sorted = [...rects].sort((a, b) => {
+    if (Math.abs(a.x - b.x) < epsilon) {
       return a.y - b.y;
     }
     return a.x - b.x;
   });
   
-  const fullyMerged = [];
-  current = null;
+  const merged = [];
+  let current = null;
   
-  for (const rect of horizontallyMerged) {
+  for (const rect of sorted) {
     if (!current) {
       current = { ...rect };
       continue;
     }
     
     // Check if rectangles are in the same column and adjacent vertically
-    const sameColumn = Math.abs(current.x - rect.x) < 0.01;
-    const sameWidth = Math.abs(current.width - rect.width) < 0.01;
-    const adjacent = Math.abs((current.y + current.height) - rect.y) < 0.01;
+    const sameColumn = Math.abs(current.x - rect.x) < epsilon;
+    const sameWidth = Math.abs(current.width - rect.width) < epsilon;
+    const adjacent = Math.abs((current.y + current.height) - rect.y) < epsilon;
     
     if (sameColumn && sameWidth && adjacent) {
       // Merge vertically by extending height
       current.height += rect.height;
     } else {
       // Can't merge, save current and start new
-      fullyMerged.push(current);
+      merged.push(current);
       current = { ...rect };
     }
   }
+  
   if (current) {
-    fullyMerged.push(current);
+    merged.push(current);
   }
   
-  return fullyMerged;
+  return merged;
+}
+
+/**
+ * Flatten merged rectangles into a single path by computing their union outline
+ * This creates one polygon/path that represents all rectangles combined
+ * Uses improved edge matching with better floating point precision handling
+ */
+function flattenRectanglesToPath(rects, epsilon = 0.001) {
+  if (rects.length === 0) return null;
+  if (rects.length === 1) {
+    // Single rectangle - return as closed path
+    const r = rects[0];
+    // Ensure path is closed with Z command
+    return `M ${r.x.toFixed(2)},${r.y.toFixed(2)} L ${(r.x + r.width).toFixed(2)},${r.y.toFixed(2)} L ${(r.x + r.width).toFixed(2)},${(r.y + r.height).toFixed(2)} L ${r.x.toFixed(2)},${(r.y + r.height).toFixed(2)} Z`;
+  }
+  
+  // Extract all edge segments from rectangles
+  // Each rectangle contributes 4 edges
+  const allEdges = [];
+  rects.forEach((rect, idx) => {
+    const x1 = rect.x;
+    const y1 = rect.y;
+    const x2 = rect.x + rect.width;
+    const y2 = rect.y + rect.height;
+    
+    // Add 4 edges: top, right, bottom, left
+    allEdges.push({ x1, y1, x2, y2: y1, rectIndex: idx }); // top
+    allEdges.push({ x1: x2, y1, x2, y2, rectIndex: idx }); // right
+    allEdges.push({ x1: x2, y1: y2, x2: x1, y2, rectIndex: idx }); // bottom
+    allEdges.push({ x1, y1: y2, x2: x1, y2: y1, rectIndex: idx }); // left
+  });
+  
+  // Normalize and round edges for better matching
+  // Round to a grid to handle floating point precision issues
+  const gridSize = Math.max(epsilon * 100, 0.01);
+  const roundToGrid = (val) => Math.round(val / gridSize) * gridSize;
+  
+  const normalizedEdges = allEdges.map(e => {
+    // Normalize direction (smaller coordinates first)
+    let x1 = roundToGrid(e.x1);
+    let y1 = roundToGrid(e.y1);
+    let x2 = roundToGrid(e.x2);
+    let y2 = roundToGrid(e.y2);
+    
+    if (x1 > x2 || (x1 === x2 && y1 > y2)) {
+      return { x1: x2, y1: y2, x2: x1, y2: y1, rectIndex: e.rectIndex };
+    }
+    return { x1, y1, x2, y2, rectIndex: e.rectIndex };
+  });
+  
+  // Group edges by their normalized key and count occurrences
+  // Edges that appear exactly twice are internal (shared by two rectangles)
+  const edgeMap = new Map();
+  normalizedEdges.forEach(e => {
+    // Create a key that uniquely identifies the edge
+    const key = `${e.x1.toFixed(4)},${e.y1.toFixed(4)}-${e.x2.toFixed(4)},${e.y2.toFixed(4)}`;
+    if (!edgeMap.has(key)) {
+      edgeMap.set(key, []);
+    }
+    edgeMap.get(key).push(e);
+  });
+  
+  // Keep only external edges (appear once, or odd number of times)
+  const externalEdges = [];
+  edgeMap.forEach((edgeList, key) => {
+    // If edge appears odd number of times, it's external
+    if (edgeList.length % 2 === 1) {
+      externalEdges.push(edgeList[0]);
+    }
+  });
+  
+  if (externalEdges.length === 0) {
+    // All edges are internal - return bounding box as closed path
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    rects.forEach(r => {
+      minX = Math.min(minX, r.x);
+      minY = Math.min(minY, r.y);
+      maxX = Math.max(maxX, r.x + r.width);
+      maxY = Math.max(maxY, r.y + r.height);
+    });
+    // Ensure path is closed with Z command
+    return `M ${minX.toFixed(2)},${minY.toFixed(2)} L ${maxX.toFixed(2)},${minY.toFixed(2)} L ${maxX.toFixed(2)},${maxY.toFixed(2)} L ${minX.toFixed(2)},${maxY.toFixed(2)} Z`;
+  }
+  
+  // Merge collinear edge segments before connecting
+  const mergedEdges = mergeCollinearEdgeSegments(externalEdges, epsilon);
+  
+  // Connect edges into continuous paths
+  const paths = connectEdgesToPaths(mergedEdges, epsilon);
+  
+  if (paths.length === 0) return null;
+  
+  // Ensure all paths are properly closed
+  const closedPaths = paths.map(path => ensurePathClosed(path, epsilon));
+  
+  // Separate outer paths (larger, counter-clockwise) from holes (smaller, clockwise)
+  const { outerPaths, holes } = classifyPaths(closedPaths);
+  
+  if (outerPaths.length === 0) return null;
+  
+  // Build path data: start with the largest outer path
+  // Ensure all paths are properly closed
+  const mainPath = ensurePathClosed(outerPaths[0], epsilon);
+  let pathData = `M ${mainPath[0].x.toFixed(2)},${mainPath[0].y.toFixed(2)}`;
+  for (let i = 1; i < mainPath.length; i++) {
+    pathData += ` L ${mainPath[i].x.toFixed(2)},${mainPath[i].y.toFixed(2)}`;
+  }
+  // Always close the path
+  pathData += ' Z';
+  
+  // Add holes (they will be filled with even-odd rule)
+  for (const hole of holes) {
+    const closedHole = ensurePathClosed(hole, epsilon);
+    pathData += ` M ${closedHole[0].x.toFixed(2)},${closedHole[0].y.toFixed(2)}`;
+    for (let j = 1; j < closedHole.length; j++) {
+      pathData += ` L ${closedHole[j].x.toFixed(2)},${closedHole[j].y.toFixed(2)}`;
+    }
+    pathData += ' Z';
+  }
+  
+  // Add additional outer paths (separate regions) if any
+  for (let i = 1; i < outerPaths.length; i++) {
+    const path = ensurePathClosed(outerPaths[i], epsilon);
+    pathData += ` M ${path[0].x.toFixed(2)},${path[0].y.toFixed(2)}`;
+    for (let j = 1; j < path.length; j++) {
+      pathData += ` L ${path[j].x.toFixed(2)},${path[j].y.toFixed(2)}`;
+    }
+    pathData += ' Z';
+  }
+  
+  return pathData;
+}
+
+/**
+ * Merge collinear edge segments that are on the same line
+ * This handles cases where multiple small edges form one long edge
+ */
+function mergeCollinearEdgeSegments(edges, epsilon) {
+  if (edges.length === 0) return [];
+  
+  // Separate horizontal and vertical edges
+  const horizontal = [];
+  const vertical = [];
+  
+  edges.forEach(e => {
+    const isHorizontal = Math.abs(e.y1 - e.y2) < epsilon;
+    const isVertical = Math.abs(e.x1 - e.x2) < epsilon;
+    
+    if (isHorizontal) {
+      horizontal.push({ ...e, y: (e.y1 + e.y2) / 2 });
+    } else if (isVertical) {
+      vertical.push({ ...e, x: (e.x1 + e.x2) / 2 });
+    } else {
+      // Diagonal edge - keep as is
+      horizontal.push(e);
+    }
+  });
+  
+  const merged = [];
+  
+  // Merge horizontal edges on the same y coordinate
+  const hGroups = new Map();
+  horizontal.forEach(e => {
+    const y = Math.round(e.y / epsilon) * epsilon;
+    if (!hGroups.has(y)) {
+      hGroups.set(y, []);
+    }
+    hGroups.get(y).push(e);
+  });
+  
+  hGroups.forEach((group, y) => {
+    // Sort by x coordinate
+    group.sort((a, b) => Math.min(a.x1, a.x2) - Math.min(b.x1, b.x2));
+    
+    // Merge overlapping or adjacent segments
+    let current = { min: Math.min(group[0].x1, group[0].x2), max: Math.max(group[0].x1, group[0].x2) };
+    for (let i = 1; i < group.length; i++) {
+      const seg = group[i];
+      const segMin = Math.min(seg.x1, seg.x2);
+      const segMax = Math.max(seg.x1, seg.x2);
+      
+      if (segMin <= current.max + epsilon) {
+        // Merge
+        current.max = Math.max(current.max, segMax);
+      } else {
+        merged.push({ x1: current.min, y1: y, x2: current.max, y2: y });
+        current = { min: segMin, max: segMax };
+      }
+    }
+    merged.push({ x1: current.min, y1: y, x2: current.max, y2: y });
+  });
+  
+  // Merge vertical edges on the same x coordinate
+  const vGroups = new Map();
+  vertical.forEach(e => {
+    const x = Math.round(e.x / epsilon) * epsilon;
+    if (!vGroups.has(x)) {
+      vGroups.set(x, []);
+    }
+    vGroups.get(x).push(e);
+  });
+  
+  vGroups.forEach((group, x) => {
+    // Sort by y coordinate
+    group.sort((a, b) => Math.min(a.y1, a.y2) - Math.min(b.y1, b.y2));
+    
+    // Merge overlapping or adjacent segments
+    let current = { min: Math.min(group[0].y1, group[0].y2), max: Math.max(group[0].y1, group[0].y2) };
+    for (let i = 1; i < group.length; i++) {
+      const seg = group[i];
+      const segMin = Math.min(seg.y1, seg.y2);
+      const segMax = Math.max(seg.y1, seg.y2);
+      
+      if (segMin <= current.max + epsilon) {
+        // Merge
+        current.max = Math.max(current.max, segMax);
+      } else {
+        merged.push({ x1: x, y1: current.min, x2: x, y2: current.max });
+        current = { min: segMin, max: segMax };
+      }
+    }
+    merged.push({ x1: x, y1: current.min, x2: x, y2: current.max });
+  });
+  
+  return merged;
+}
+
+/**
+ * Ensure a path is properly closed (first point = last point within epsilon)
+ * This is critical for proper SVG rendering - unclosed paths cause fill issues
+ */
+function ensurePathClosed(path, epsilon = 0.001) {
+  if (path.length < 3) {
+    // Path too short to be closed - return as is (will be handled by caller)
+    return path;
+  }
+  
+  const first = path[0];
+  const last = path[path.length - 1];
+  const distance = Math.sqrt((first.x - last.x) ** 2 + (first.y - last.y) ** 2);
+  
+  // Use a more generous tolerance for closing paths
+  const closeTolerance = Math.max(epsilon * 10, 0.1);
+  
+  // If path is already closed (within tolerance), ensure exact match
+  if (distance < closeTolerance) {
+    // Make last point exactly equal to first point
+    const closedPath = [...path];
+    closedPath[closedPath.length - 1] = { x: first.x, y: first.y };
+    return closedPath;
+  }
+  
+  // Path is not closed - force closure by adding the first point at the end
+  // This ensures the path is always closed for proper SVG rendering
+  if (distance > closeTolerance) {
+    // Only warn if the gap is significant
+    if (distance > 1.0) {
+      console.warn(`Path not properly closed (distance: ${distance.toFixed(4)}), forcing closure`);
+    }
+    // Add first point at the end to close the path
+    return [...path, { x: first.x, y: first.y }];
+  }
+  
+  // Fallback: replace last point with first point
+  return [...path.slice(0, -1), { x: first.x, y: first.y }];
+}
+
+/**
+ * Classify paths as outer paths (counter-clockwise, larger) or holes (clockwise, smaller)
+ * Uses the shoelace formula to calculate signed area
+ */
+function classifyPaths(paths) {
+  const outerPaths = [];
+  const holes = [];
+  
+  paths.forEach(path => {
+    if (path.length < 3) return;
+    
+    // Calculate signed area using shoelace formula
+    let area = 0;
+    for (let i = 0; i < path.length; i++) {
+      const j = (i + 1) % path.length;
+      area += path[i].x * path[j].y;
+      area -= path[j].x * path[i].y;
+    }
+    area /= 2;
+    
+    // Positive area = counter-clockwise = outer path
+    // Negative area = clockwise = hole
+    // Also consider path size - larger paths are more likely to be outer
+    const pathLength = path.length;
+    const isLarge = pathLength > 10; // Threshold for "large" path
+    
+    if (area > 0 || (area === 0 && isLarge)) {
+      // Outer path (counter-clockwise or large)
+      outerPaths.push(path);
+    } else {
+      // Hole (clockwise)
+      holes.push(path);
+    }
+  });
+  
+  // Sort outer paths by area (largest first)
+  outerPaths.sort((a, b) => {
+    const areaA = Math.abs(calculatePathArea(a));
+    const areaB = Math.abs(calculatePathArea(b));
+    return areaB - areaA;
+  });
+  
+  // Sort holes by area (smallest first) - they'll be processed in order
+  holes.sort((a, b) => {
+    const areaA = Math.abs(calculatePathArea(a));
+    const areaB = Math.abs(calculatePathArea(b));
+    return areaA - areaB;
+  });
+  
+  return { outerPaths, holes };
+}
+
+/**
+ * Calculate the area of a path using shoelace formula
+ */
+function calculatePathArea(path) {
+  if (path.length < 3) return 0;
+  
+  let area = 0;
+  for (let i = 0; i < path.length; i++) {
+    const j = (i + 1) % path.length;
+    area += path[i].x * path[j].y;
+    area -= path[j].x * path[i].y;
+  }
+  return area / 2;
+}
+
+/**
+ * Connect edges into continuous paths
+ */
+function connectEdgesToPaths(edges, epsilon) {
+  if (edges.length === 0) return [];
+  
+  const paths = [];
+  const used = new Set();
+  
+  // Build spatial index for faster lookup
+  // Use a coarser grid for better matching
+  const gridSize = Math.max(epsilon * 10, 0.1);
+  const spatialIndex = new Map();
+  
+  const getGridKey = (x, y) => {
+    return `${Math.floor(x / gridSize)},${Math.floor(y / gridSize)}`;
+  };
+  
+  edges.forEach((edge, idx) => {
+    const key1 = getGridKey(edge.x1, edge.y1);
+    const key2 = getGridKey(edge.x2, edge.y2);
+    if (!spatialIndex.has(key1)) spatialIndex.set(key1, []);
+    if (!spatialIndex.has(key2)) spatialIndex.set(key2, []);
+    spatialIndex.get(key1).push({ idx, point: { x: edge.x1, y: edge.y1 }, end: { x: edge.x2, y: edge.y2 } });
+    spatialIndex.get(key2).push({ idx, point: { x: edge.x2, y: edge.y2 }, end: { x: edge.x1, y: edge.y1 } });
+  });
+  
+  const pointDistance = (p1, p2) => {
+    const dx = p1.x - p2.x;
+    const dy = p1.y - p2.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+  
+  for (let i = 0; i < edges.length; i++) {
+    if (used.has(i)) continue;
+    
+    const edge = edges[i];
+    const path = [{ x: edge.x1, y: edge.y1 }, { x: edge.x2, y: edge.y2 }];
+    used.add(i);
+    
+    // Extend path forward
+    let extended = true;
+    while (extended) {
+      extended = false;
+      const pathEnd = path[path.length - 1];
+      const key = getGridKey(pathEnd.x, pathEnd.y);
+      const candidates = spatialIndex.get(key) || [];
+      
+      // Also check neighboring grid cells for better matching
+      const neighbors = [
+        getGridKey(pathEnd.x + gridSize, pathEnd.y),
+        getGridKey(pathEnd.x - gridSize, pathEnd.y),
+        getGridKey(pathEnd.x, pathEnd.y + gridSize),
+        getGridKey(pathEnd.x, pathEnd.y - gridSize)
+      ];
+      neighbors.forEach(nKey => {
+        const nCandidates = spatialIndex.get(nKey) || [];
+        candidates.push(...nCandidates);
+      });
+      
+      // Use a more generous tolerance for matching edges
+      const matchTolerance = Math.max(epsilon * 5, 0.1);
+      
+      // Find the best matching candidate (closest point)
+      let bestCandidate = null;
+      let bestDistance = Infinity;
+      
+      for (const candidate of candidates) {
+        if (used.has(candidate.idx)) continue;
+        const dist = pointDistance(pathEnd, candidate.point);
+        if (dist < matchTolerance && dist < bestDistance) {
+          bestDistance = dist;
+          bestCandidate = candidate;
+        }
+      }
+      
+      if (bestCandidate) {
+        path.push(bestCandidate.end);
+        used.add(bestCandidate.idx);
+        extended = true;
+      }
+    }
+    
+    // Extend path backward
+    extended = true;
+    while (extended) {
+      extended = false;
+      const pathStart = path[0];
+      const key = getGridKey(pathStart.x, pathStart.y);
+      const candidates = spatialIndex.get(key) || [];
+      
+      // Also check neighboring grid cells
+      const neighbors = [
+        getGridKey(pathStart.x + gridSize, pathStart.y),
+        getGridKey(pathStart.x - gridSize, pathStart.y),
+        getGridKey(pathStart.x, pathStart.y + gridSize),
+        getGridKey(pathStart.x, pathStart.y - gridSize)
+      ];
+      neighbors.forEach(nKey => {
+        const nCandidates = spatialIndex.get(nKey) || [];
+        candidates.push(...nCandidates);
+      });
+      
+      // Use a more generous tolerance for matching edges
+      const matchTolerance = Math.max(epsilon * 5, 0.1);
+      
+      // Find the best matching candidate (closest point)
+      let bestCandidate = null;
+      let bestDistance = Infinity;
+      
+      for (const candidate of candidates) {
+        if (used.has(candidate.idx)) continue;
+        const dist = pointDistance(pathStart, candidate.point);
+        if (dist < matchTolerance && dist < bestDistance) {
+          bestDistance = dist;
+          bestCandidate = candidate;
+        }
+      }
+      
+      if (bestCandidate) {
+        path.unshift(bestCandidate.end);
+        used.add(bestCandidate.idx);
+        extended = true;
+      }
+    }
+    
+    // Ensure path is properly closed before adding
+    if (path.length > 2) {
+      const pathStart = path[0];
+      const pathEnd = path[path.length - 1];
+      const closeDistance = pointDistance(pathStart, pathEnd);
+      
+      // Use a more generous tolerance for closing paths
+      const closeTolerance = Math.max(epsilon * 10, 0.1);
+      
+      // If path is almost closed, ensure it's properly closed
+      if (closeDistance < closeTolerance) {
+        // Path forms a loop - ensure last point equals first point exactly
+        path[path.length - 1] = { x: pathStart.x, y: pathStart.y };
+      } else if (closeDistance < 1.0) {
+        // Path is close but not exact - force closure
+        path.push({ x: pathStart.x, y: pathStart.y });
+      }
+      // If distance is > 1.0, it's likely an open path (edge case)
+      // We'll still add it but it won't be closed
+      
+      paths.push(path);
+    }
+  }
+  
+  return paths;
 }
 
 /**
@@ -987,14 +1522,28 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     imageWidth = 800,
     imageHeight = 800,
     applyDithering = false,
-    ditheringResolution = 500
+    ditheringResolution = 500,
+    ditheringThreshold = 128,
+    ditheringContrast = 0,
+    ditheringBrightness = 0,
+    exportMode = 'optimized', // 'optimized' or 'simple'
+    pixelFilter = 'both', // 'white', 'black', or 'both'
+    renderBackground = true // Whether to render background rectangle
   } = options;
 
-  // Create SVG header with white background
+  // Create SVG header
+  // Determine background color based on pixel filter
+  const backgroundColor = pixelFilter === 'white' ? 'black' : 
+                         pixelFilter === 'black' ? 'white' : 'white';
+  
   let svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-  <rect width="${width}" height="${height}" fill="white"/>
 `;
+  
+  // Only add background rectangle if renderBackground is true
+  if (renderBackground) {
+    svg += `  <rect width="${width}" height="${height}" fill="${backgroundColor}"/>\n`;
+  }
 
   if (!texture || !texture.image) {
     svg += '</svg>';
@@ -1054,7 +1603,13 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     let processedImageData = imageData;
     if (applyDithering) {
       console.log(`Applying Floyd-Steinberg dithering to ${processWidth}x${processHeight} image...`);
-      processedImageData = applyFloydSteinbergDithering(imageData, 2);
+      processedImageData = applyFloydSteinbergDithering(
+        imageData, 
+        2, 
+        ditheringThreshold, 
+        ditheringContrast, 
+        ditheringBrightness
+      );
     }
     
     const data = processedImageData.data;
@@ -1064,11 +1619,13 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     // Configuration - different for dithered vs non-dithered
     let dotRadius, brightnessThreshold, minAlpha, maxDots, stepSize;
     
+    // Pixel filter threshold (always use midpoint for filtering)
+    const pixelFilterThreshold = 128;
+    
     if (applyDithering) {
       // For dithered images: MUST process every pixel to preserve the error-diffused pattern
       // Dithering creates an organic pattern that will be lost with grid sampling
-      // We'll generate black rectangles for dark pixels, nothing for light pixels
-      brightnessThreshold = 250; // Only skip pure white (255)
+      brightnessThreshold = 250; // Only skip pure white (255) for dithered
       minAlpha = 128;
       maxDots = 1000000; // Higher limit since we need to capture the pattern
       // CRITICAL: Always use stepSize = 1 for dithered images to preserve the pattern
@@ -1078,7 +1635,7 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     } else {
       // For non-dithered images: use sampling to reduce dots
       dotRadius = 0.6;
-      brightnessThreshold = 245;
+      brightnessThreshold = 245; // Skip very light pixels for non-dithered
       minAlpha = 128;
       maxDots = 500000;
       // Use step size to skip pixels for very large images
@@ -1105,8 +1662,17 @@ export function exportImageToSVG(texture, renderer, options = {}) {
         // Calculate brightness
         const brightness = (r + g + b) / 3;
         
-        // Skip very light pixels (almost white background)
-        if (brightness > brightnessThreshold) continue;
+        // Filter pixels based on pixelFilter mode
+        if (pixelFilter === 'black') {
+          // Only render dark pixels (black) - brightness below midpoint
+          if (brightness > pixelFilterThreshold) continue;
+        } else if (pixelFilter === 'white') {
+          // Only render light pixels (white) - brightness above midpoint
+          if (brightness <= pixelFilterThreshold) continue;
+        } else {
+          // 'both' - render all pixels (but still skip very light ones for non-dithered)
+          if (!applyDithering && brightness > brightnessThreshold) continue;
+        }
         
         // Scale coordinates back to original size if downsampled
         const scaledX = x / scaleFactor;
@@ -1156,15 +1722,41 @@ export function exportImageToSVG(texture, renderer, options = {}) {
       svg += `  <g fill="${color}" stroke="none">\n`;
       
       if (dots.length > 0 && dots[0].isRect) {
-        // For dithered images: merge rectangles of same color
-        console.log(`Merging ${dots.length} rectangles for color ${color}...`);
-        const mergedRects = mergeRectangles(dots);
-        console.log(`Merged to ${mergedRects.length} rectangles (${((1 - mergedRects.length / dots.length) * 100).toFixed(1)}% reduction)`);
-        
-        // Convert merged rectangles to paths and flatten
-        mergedRects.forEach(rect => {
-          svg += `    <rect x="${rect.x.toFixed(2)}" y="${rect.y.toFixed(2)}" width="${rect.width.toFixed(2)}" height="${rect.height.toFixed(2)}"/>\n`;
-        });
+        if (exportMode === 'simple') {
+          // Simple mode: no optimization, just render pixels directly as rectangles
+          console.log(`Simple mode: rendering ${dots.length} pixels directly (no optimization)...`);
+          
+          // Output as individual rectangles without any merging
+          dots.forEach(pixel => {
+            svg += `    <rect x="${pixel.x.toFixed(2)}" y="${pixel.y.toFixed(2)}" width="${pixel.width.toFixed(2)}" height="${pixel.height.toFixed(2)}"/>\n`;
+          });
+        } else {
+          // Optimized mode (VIP): merge rectangles, then flatten to single path
+          console.log(`Optimized mode: merging ${dots.length} rectangles for color ${color}...`);
+          const mergedRects = mergeRectangles(dots);
+          console.log(`Merged to ${mergedRects.length} rectangles (${((1 - mergedRects.length / dots.length) * 100).toFixed(1)}% reduction)`);
+          
+          // Flatten all rectangles into a single path (union)
+          console.log(`Flattening ${mergedRects.length} rectangles into single path...`);
+          const flattenedPath = flattenRectanglesToPath(mergedRects);
+          
+          if (flattenedPath) {
+            // Ensure the path ends with Z (closed) if it doesn't already
+            let finalPath = flattenedPath.trim();
+            if (!finalPath.endsWith('Z') && !finalPath.endsWith('z')) {
+              finalPath += ' Z';
+            }
+            // Output as a single path element with fill-rule for proper rendering
+            svg += `    <path d="${finalPath}" fill-rule="evenodd" fill="${color}"/>\n`;
+            console.log(`  Flattened to single path`);
+          } else {
+            // Fallback: output as individual rectangles if flattening fails
+            // Each rectangle is already a closed shape
+            mergedRects.forEach(rect => {
+              svg += `    <rect x="${rect.x.toFixed(2)}" y="${rect.y.toFixed(2)}" width="${rect.width.toFixed(2)}" height="${rect.height.toFixed(2)}" fill="${color}"/>\n`;
+            });
+          }
+        }
       } else {
         // For non-dithered images: use circles (no merging needed)
         dots.forEach(dot => {

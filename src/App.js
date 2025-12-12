@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
+import { Menu, Settings } from 'lucide-react';
 import STLViewer from './components/STLViewer';
 import ImageViewer from './components/ImageViewer';
 import ControlPanel from './components/ControlPanel';
@@ -9,6 +10,7 @@ import ExportPanel from './components/ExportPanel';
 import { exportSceneToSVG, downloadSVG, exportImageToSVG } from './utils/svgExporter';
 import { getSTLFileURL, getImageFileURL } from './config/stlFiles';
 import { applyFloydSteinbergDithering } from './utils/dithering';
+import { saveState, loadState, saveLoadedImages, loadLoadedImages } from './utils/statePersistence';
 
 import { DevOverlay } from 'mindone'
 import './App.css';
@@ -37,7 +39,7 @@ function SceneExporter({ meshData, edgeSettings, onExport, onSVGGenerated, apply
   return null;
 }
 
-function ImageExporter({ imageData, onExport, onSVGGenerated, applyDithering, autoGenerate = false }) {
+function ImageExporter({ imageData, onExport, onSVGGenerated, applyDithering, exportMode, pixelFilter, autoGenerate = false }) {
   const { gl, size } = useThree();
   
   React.useEffect(() => {
@@ -48,7 +50,9 @@ function ImageExporter({ imageData, onExport, onSVGGenerated, applyDithering, au
           height: size.height,
           imageWidth: imageData.width,
           imageHeight: imageData.height,
-          applyDithering
+          applyDithering,
+          exportMode,
+          pixelFilter
         });
         onSVGGenerated(svgString);
       };
@@ -78,7 +82,7 @@ function App() {
   const [processedPreviewUrl, setProcessedPreviewUrl] = useState(null); // For processed preview (with dithering)
   const [meshData, setMeshData] = useState(null);
   const [generatedSVG, setGeneratedSVG] = useState(null);
-  const [selectedDefaultFile, setSelectedDefaultFile] = useState('clouds.jpg');
+  const [selectedDefaultFile, setSelectedDefaultFile] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [inputMode, setInputMode] = useState('image'); // 'stl' or 'image'
   const [loadedImages, setLoadedImages] = useState([]); // Track loaded images for the file list
@@ -88,17 +92,29 @@ function App() {
     width: 1,
     shadingColors: 1
   });
+  const [isStateLoaded, setIsStateLoaded] = useState(false); // Track if we've loaded saved state
   const [applyDithering, setApplyDithering] = useState(false);
   const [ditheringResolution, setDitheringResolution] = useState(500); // Resolution for dithering (1-1000)
+  const [ditheringThreshold, setDitheringThreshold] = useState(128); // Threshold for dithering (0-255)
+  const [ditheringContrast, setDitheringContrast] = useState(0); // Contrast adjustment (-100 to 100)
+  const [ditheringBrightness, setDitheringBrightness] = useState(0); // Brightness adjustment (-100 to 100)
   const [viewMode, setViewMode] = useState('svg'); // '3d' or 'svg' - start with svg for images
+  const [exportMode, setExportMode] = useState('optimized'); // 'optimized' or 'simple' (for images)
+  const [stlExportMode, setStlExportMode] = useState('geometric'); // 'geometric' or 'shader' (for 3D)
+  const [pixelFilter, setPixelFilter] = useState('both'); // 'white', 'black', or 'both'
+  const [renderBackground, setRenderBackground] = useState(true); // Whether to render background in SVG
   const [isDragging, setIsDragging] = useState(false);
   const [initialScale, setInitialScale] = useState(0.5); // Start with a smaller default scale
+  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
   const canvasRef = useRef(null);
   const exportTriggerRef = useRef(0);
   const dragCounterRef = useRef(0);
   const loadedImagesRef = useRef([]);
   const previewContainerRef = useRef(null);
   const transformRef = useRef(null);
+  const hasCenteredInitialViewRef = useRef(false); // Track if we've done initial centering
+  const currentImageKeyRef = useRef(null); // Track current image to detect image changes
 
   const handleFileUpload = (file, mode, isExistingSelection = false) => {
     setIsLoading(true);
@@ -232,6 +248,9 @@ function App() {
     // Automatically switch to 2D mode when image loads
     setViewMode('svg');
     
+    // Reset centering flag when new image loads
+    hasCenteredInitialViewRef.current = false;
+    
     // Calculate initial scale to fit the image
     if (data && data.width && data.height) {
       // Calculate scale immediately, then recalculate after a short delay when container is ready
@@ -265,10 +284,10 @@ function App() {
   useEffect(() => {
     if (!imageData || !imageData.width || !imageData.height) return;
     
-    const recalculateScale = () => {
-      const scale = calculateInitialScale(imageData.width, imageData.height);
-      setInitialScale(scale);
-    };
+      const recalculateScale = () => {
+        const scale = calculateInitialScale(imageData.width, imageData.height);
+        setInitialScale(scale);
+      };
     
     // Calculate immediately
     recalculateScale();
@@ -292,23 +311,36 @@ function App() {
     };
   }, [imageData]);
 
-  // Center the view when image preview loads
+  // Center the view only when a new image loads (not on every preview update)
   useEffect(() => {
-    if ((processedPreviewUrl || imagePreviewUrl) && transformRef.current?.centerView) {
+    // Only center on initial load of a new image, not on preview updates
+    const imageKey = imageFile?.name || imageFile?.size;
+    const isNewImage = imageKey && imageKey !== currentImageKeyRef.current;
+    
+    if (isNewImage) {
+      // Reset the centering flag for new image
+      hasCenteredInitialViewRef.current = false;
+      currentImageKeyRef.current = imageKey;
+    }
+    
+    if ((processedPreviewUrl || imagePreviewUrl) && transformRef.current?.centerView && !hasCenteredInitialViewRef.current) {
       // Use multiple timeouts to ensure the DOM is ready
       const timer1 = setTimeout(() => {
-        if (transformRef.current?.centerView) {
+        if (transformRef.current?.centerView && !hasCenteredInitialViewRef.current) {
           transformRef.current.centerView();
+          hasCenteredInitialViewRef.current = true;
         }
       }, 50);
       const timer2 = setTimeout(() => {
-        if (transformRef.current?.centerView) {
+        if (transformRef.current?.centerView && !hasCenteredInitialViewRef.current) {
           transformRef.current.centerView();
+          hasCenteredInitialViewRef.current = true;
         }
       }, 200);
       const timer3 = setTimeout(() => {
-        if (transformRef.current?.centerView) {
+        if (transformRef.current?.centerView && !hasCenteredInitialViewRef.current) {
           transformRef.current.centerView();
+          hasCenteredInitialViewRef.current = true;
         }
       }, 500);
       
@@ -318,7 +350,7 @@ function App() {
         clearTimeout(timer3);
       };
     }
-  }, [processedPreviewUrl, imagePreviewUrl]);
+  }, [processedPreviewUrl, imagePreviewUrl, imageFile]);
 
   // Generate preview image when image data or dithering settings change (fast preview)
   // This only generates a preview image, NOT SVG
@@ -359,7 +391,13 @@ function App() {
           // Apply dithering if requested (on downsampled image)
           if (applyDithering) {
             const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
-            const ditheredData = applyFloydSteinbergDithering(imageDataObj, 2);
+            const ditheredData = applyFloydSteinbergDithering(
+              imageDataObj, 
+              2, 
+              ditheringThreshold, 
+              ditheringContrast, 
+              ditheringBrightness
+            );
             processCtx.putImageData(ditheredData, 0, 0);
           }
           
@@ -390,7 +428,7 @@ function App() {
       // Clear processed preview if no image
       setProcessedPreviewUrl(null);
     }
-  }, [inputMode, imageData, applyDithering, ditheringResolution]);
+  }, [inputMode, imageData, applyDithering, ditheringResolution, ditheringThreshold, ditheringContrast, ditheringBrightness]);
 
 
   const handleDefaultFileSelect = React.useCallback(async (filename) => {
@@ -546,10 +584,137 @@ function App() {
     }
   };
 
-  // Load default file on mount
+  // Load saved state on mount
   useEffect(() => {
-    handleDefaultFileSelect('clouds.jpg');
+    const savedState = loadState();
+    const savedImages = loadLoadedImages();
+    
+    if (savedState) {
+      // Restore settings
+      setInputMode(savedState.inputMode || 'image');
+      setViewMode(savedState.viewMode || 'svg');
+      setEdgeSettings(savedState.edgeSettings || {
+        threshold: 0.1,
+        color: '#000000',
+        width: 1,
+        shadingColors: 1
+      });
+      setApplyDithering(savedState.applyDithering || false);
+      setDitheringResolution(savedState.ditheringResolution || 500);
+      setDitheringThreshold(savedState.ditheringThreshold || 128);
+      setDitheringContrast(savedState.ditheringContrast || 0);
+      setDitheringBrightness(savedState.ditheringBrightness || 0);
+      setExportMode(savedState.exportMode || 'optimized');
+      setStlExportMode(savedState.stlExportMode || 'geometric');
+      setPixelFilter(savedState.pixelFilter || 'both');
+      setRenderBackground(savedState.renderBackground !== undefined ? savedState.renderBackground : true);
+      setInitialScale(savedState.initialScale || 0.5);
+      
+      // Restore loaded images metadata (without file objects)
+      if (savedImages && savedImages.length > 0) {
+        setLoadedImages(savedImages);
+        loadedImagesRef.current = savedImages;
+      }
+      
+      // Restore selected file
+      if (savedState.selectedDefaultFile) {
+        setSelectedDefaultFile(savedState.selectedDefaultFile);
+        // Load the file
+        handleDefaultFileSelect(savedState.selectedDefaultFile);
+      } else if (savedState.currentImageFileName) {
+        // Try to find the image in loaded images or default files
+        const foundImage = savedImages?.find(img => img.name === savedState.currentImageFileName);
+        if (foundImage) {
+          // Image was in loaded images, but we can't restore the file object
+          // User will need to re-upload or we could try to load from default files
+          console.log('Saved image found in metadata, but file object cannot be restored');
+        }
+        // Check if it's a default file
+        const defaultFiles = [
+          { value: 'clouds.jpg', label: 'Clouds', type: 'image' },
+          { value: '24_cell_Schlegel.stl', label: '24-Cell (Schlegel)', type: 'stl' },
+          { value: '120_Cell.stl', label: '120-Cell', type: 'stl' },
+          { value: '600_cell.stl', label: '600-Cell', type: 'stl' }
+        ];
+        const defaultFile = defaultFiles.find(f => f.value === savedState.currentImageFileName);
+        if (defaultFile) {
+          setSelectedDefaultFile(savedState.currentImageFileName);
+          handleDefaultFileSelect(savedState.currentImageFileName);
+        }
+      } else if (savedState.currentStlFileName) {
+        // Try to load STL file
+        const defaultFiles = [
+          { value: '24_cell_Schlegel.stl', label: '24-Cell (Schlegel)', type: 'stl' },
+          { value: '120_Cell.stl', label: '120-Cell', type: 'stl' },
+          { value: '600_cell.stl', label: '600-Cell', type: 'stl' }
+        ];
+        const defaultFile = defaultFiles.find(f => f.value === savedState.currentStlFileName);
+        if (defaultFile) {
+          setSelectedDefaultFile(savedState.currentStlFileName);
+          handleDefaultFileSelect(savedState.currentStlFileName);
+        }
+      } else {
+        // No saved file, load default
+        setSelectedDefaultFile('clouds.jpg');
+        handleDefaultFileSelect('clouds.jpg');
+      }
+    } else {
+      // No saved state, load default file
+      setSelectedDefaultFile('clouds.jpg');
+      handleDefaultFileSelect('clouds.jpg');
+    }
+    
+    setIsStateLoaded(true);
   }, [handleDefaultFileSelect]);
+
+  // Save state whenever relevant state changes (but only after initial load)
+  useEffect(() => {
+    if (!isStateLoaded) return; // Don't save during initial load
+    
+    saveState({
+      selectedDefaultFile,
+      imageFile,
+      stlFile,
+      inputMode,
+      viewMode,
+      edgeSettings,
+      applyDithering,
+      ditheringResolution,
+      ditheringThreshold,
+      ditheringContrast,
+      ditheringBrightness,
+      exportMode,
+      stlExportMode,
+      pixelFilter,
+      renderBackground,
+      initialScale
+    });
+  }, [
+    selectedDefaultFile,
+    imageFile,
+    stlFile,
+    inputMode,
+    viewMode,
+    edgeSettings,
+    applyDithering,
+    ditheringResolution,
+    ditheringThreshold,
+    ditheringContrast,
+    ditheringBrightness,
+      exportMode,
+      stlExportMode,
+      pixelFilter,
+      renderBackground,
+      initialScale,
+      isStateLoaded
+  ]);
+
+  // Save loaded images whenever they change
+  useEffect(() => {
+    if (!isStateLoaded) return; // Don't save during initial load
+    
+    saveLoadedImages(loadedImages);
+  }, [loadedImages, isStateLoaded]);
 
   // Cleanup thumbnail URLs on unmount
   useEffect(() => {
@@ -583,7 +748,13 @@ function App() {
             imageWidth: imageData.width,
             imageHeight: imageData.height,
             applyDithering,
-            ditheringResolution: applyDithering ? ditheringResolution : undefined
+            ditheringResolution: applyDithering ? ditheringResolution : undefined,
+            ditheringThreshold: applyDithering ? ditheringThreshold : undefined,
+            ditheringContrast: applyDithering ? ditheringContrast : undefined,
+            ditheringBrightness: applyDithering ? ditheringBrightness : undefined,
+            exportMode,
+            pixelFilter,
+            renderBackground
           });
           
           const endTime = performance.now();
@@ -638,6 +809,103 @@ function App() {
           </div>
         </div>
       )}
+      {/* Floating sidebar toggle buttons */}
+      <button
+        className="sidebar-toggle sidebar-toggle-left"
+        onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
+        aria-label="Toggle left sidebar"
+      >
+        <Menu size={24} />
+      </button>
+      <button
+        className="sidebar-toggle sidebar-toggle-right"
+        onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+        aria-label="Toggle right sidebar"
+      >
+        <Settings size={24} />
+      </button>
+
+      {/* Sidebar overlay for mobile */}
+      {isLeftSidebarOpen && (
+        <div className={`sidebar-overlay ${isLeftSidebarOpen ? 'active' : ''}`} onClick={() => setIsLeftSidebarOpen(false)}>
+          <div className="sidebar-content sidebar-content-left" onClick={(e) => e.stopPropagation()}>
+            <ControlPanel
+              onFileUpload={handleFileUpload}
+              inputMode={inputMode}
+              selectedDefaultFile={selectedDefaultFile}
+              onDefaultFileSelect={handleDefaultFileSelect}
+              loadedImages={loadedImages}
+              currentImageFileName={imageFile?.name}
+            />
+          </div>
+        </div>
+      )}
+
+      {isRightSidebarOpen && (
+        <div className={`sidebar-overlay ${isRightSidebarOpen ? 'active' : ''}`} onClick={() => setIsRightSidebarOpen(false)}>
+          <div className="sidebar-content sidebar-content-right" onClick={(e) => e.stopPropagation()}>
+            <ExportPanel
+              onGenerateSVG={handleGenerateSVG}
+              onSaveSVG={handleSaveSVG}
+              generatedSVG={generatedSVG}
+              hasMesh={!!meshData}
+              hasImage={!!imageData}
+              inputMode={inputMode}
+              edgeSettings={edgeSettings}
+              onEdgeSettingsChange={(newSettings) => {
+                setEdgeSettings(newSettings);
+                setGeneratedSVG(null); // Clear SVG when settings change
+              }}
+              applyDithering={applyDithering}
+              onDitheringChange={(enabled) => {
+                setApplyDithering(enabled);
+                setGeneratedSVG(null); // Clear SVG when dithering changes
+              }}
+              ditheringResolution={ditheringResolution}
+              onDitheringResolutionChange={(resolution) => {
+                setDitheringResolution(resolution);
+                setGeneratedSVG(null); // Clear SVG when resolution changes
+              }}
+              ditheringThreshold={ditheringThreshold}
+              onDitheringThresholdChange={(threshold) => {
+                setDitheringThreshold(threshold);
+                setGeneratedSVG(null); // Clear SVG when threshold changes
+              }}
+              ditheringContrast={ditheringContrast}
+              onDitheringContrastChange={(contrast) => {
+                setDitheringContrast(contrast);
+                setGeneratedSVG(null); // Clear SVG when contrast changes
+              }}
+              ditheringBrightness={ditheringBrightness}
+              onDitheringBrightnessChange={(brightness) => {
+                setDitheringBrightness(brightness);
+                setGeneratedSVG(null); // Clear SVG when brightness changes
+              }}
+              exportMode={exportMode}
+              onExportModeChange={(mode) => {
+                setExportMode(mode);
+                setGeneratedSVG(null); // Clear SVG when mode changes
+              }}
+              stlExportMode={stlExportMode}
+              onStlExportModeChange={(mode) => {
+                setStlExportMode(mode);
+                setGeneratedSVG(null); // Clear SVG when mode changes
+              }}
+              pixelFilter={pixelFilter}
+              onPixelFilterChange={(filter) => {
+                setPixelFilter(filter);
+                setGeneratedSVG(null); // Clear SVG when filter changes
+              }}
+              renderBackground={renderBackground}
+              onRenderBackgroundChange={(enabled) => {
+                setRenderBackground(enabled);
+                setGeneratedSVG(null); // Clear SVG when background setting changes
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       <ControlPanel
         onFileUpload={handleFileUpload}
         inputMode={inputMode}
@@ -735,8 +1003,10 @@ function App() {
             ) : (processedPreviewUrl || imagePreviewUrl) ? (
               <div className="svg-preview-view" ref={previewContainerRef}>
                 <TransformWrapper
-                  key={`preview-${processedPreviewUrl || imagePreviewUrl}`}
-                  ref={transformRef}
+                  key={`preview-${imageFile?.name || imageFile?.size || 'default'}`}
+                  ref={(ref) => {
+                    transformRef.current = ref;
+                  }}
                   initialScale={initialScale}
                   minScale={0.01}
                   maxScale={10}
@@ -807,6 +1077,41 @@ function App() {
         onDitheringResolutionChange={(resolution) => {
           setDitheringResolution(resolution);
           setGeneratedSVG(null); // Clear SVG when resolution changes
+        }}
+        ditheringThreshold={ditheringThreshold}
+        onDitheringThresholdChange={(threshold) => {
+          setDitheringThreshold(threshold);
+          setGeneratedSVG(null); // Clear SVG when threshold changes
+        }}
+        ditheringContrast={ditheringContrast}
+        onDitheringContrastChange={(contrast) => {
+          setDitheringContrast(contrast);
+          setGeneratedSVG(null); // Clear SVG when contrast changes
+        }}
+        ditheringBrightness={ditheringBrightness}
+        onDitheringBrightnessChange={(brightness) => {
+          setDitheringBrightness(brightness);
+          setGeneratedSVG(null); // Clear SVG when brightness changes
+        }}
+              exportMode={exportMode}
+              onExportModeChange={(mode) => {
+                setExportMode(mode);
+                setGeneratedSVG(null); // Clear SVG when mode changes
+              }}
+              stlExportMode={stlExportMode}
+              onStlExportModeChange={(mode) => {
+                setStlExportMode(mode);
+                setGeneratedSVG(null); // Clear SVG when mode changes
+              }}
+              pixelFilter={pixelFilter}
+              onPixelFilterChange={(filter) => {
+                setPixelFilter(filter);
+                setGeneratedSVG(null); // Clear SVG when filter changes
+              }}
+        renderBackground={renderBackground}
+        onRenderBackgroundChange={(enabled) => {
+          setRenderBackground(enabled);
+          setGeneratedSVG(null); // Clear SVG when background setting changes
         }}
       />
     </div>

@@ -1,8 +1,39 @@
 /**
+ * Apply contrast adjustment to a pixel value
+ * @param {number} value - Pixel value (0-255)
+ * @param {number} contrast - Contrast adjustment (-100 to 100, where 0 is no change)
+ * @returns {number} Adjusted value
+ */
+function applyContrast(value, contrast) {
+  // Convert contrast from -100 to 100 to a factor
+  // 0 = no change, positive = more contrast, negative = less contrast
+  const factor = (100 + contrast) / 100;
+  const adjusted = ((value / 255 - 0.5) * factor + 0.5) * 255;
+  return Math.min(255, Math.max(0, adjusted));
+}
+
+/**
+ * Apply brightness adjustment to a pixel value
+ * @param {number} value - Pixel value (0-255)
+ * @param {number} brightness - Brightness adjustment (-100 to 100, where 0 is no change)
+ * @returns {number} Adjusted value
+ */
+function applyBrightness(value, brightness) {
+  // Convert brightness from -100 to 100 to an offset
+  const offset = (brightness / 100) * 255;
+  return Math.min(255, Math.max(0, value + offset));
+}
+
+/**
  * Apply Floyd-Steinberg dithering to ImageData
  * Converts grayscale/color image to black and white using error diffusion
+ * @param {ImageData} imageData - The image data to dither
+ * @param {number} levels - Number of quantization levels (default: 2)
+ * @param {number} threshold - Threshold for quantization (0-255, default: 128)
+ * @param {number} contrast - Contrast adjustment (-100 to 100, default: 0)
+ * @param {number} brightness - Brightness adjustment (-100 to 100, default: 0)
  */
-export function applyFloydSteinbergDithering(imageData, levels = 2) {
+export function applyFloydSteinbergDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0) {
   const data = imageData.data;
   const width = imageData.width;
   const height = imageData.height;
@@ -11,9 +42,13 @@ export function applyFloydSteinbergDithering(imageData, levels = 2) {
   const output = new ImageData(width, height);
   const outputData = output.data;
   
-  // Copy original data
-  for (let i = 0; i < data.length; i++) {
-    outputData[i] = data[i];
+  // Copy original data and apply contrast/brightness adjustments
+  for (let i = 0; i < data.length; i += 4) {
+    // Apply contrast and brightness to each RGB channel
+    outputData[i] = applyBrightness(applyContrast(data[i], contrast), brightness);
+    outputData[i + 1] = applyBrightness(applyContrast(data[i + 1], contrast), brightness);
+    outputData[i + 2] = applyBrightness(applyContrast(data[i + 2], contrast), brightness);
+    outputData[i + 3] = data[i + 3]; // Alpha unchanged
   }
   
   // Floyd-Steinberg error diffusion matrix
@@ -31,9 +66,8 @@ export function applyFloydSteinbergDithering(imageData, levels = 2) {
       // Convert to grayscale for quantization
       const gray = 0.299 * r + 0.587 * g + 0.114 * b;
       
-      // Quantize to nearest level (for 2 levels: 0 or 255)
-      const quantized = Math.round((gray / 255) * (levels - 1)) * (255 / (levels - 1));
-      const quantizedValue = Math.min(255, Math.max(0, quantized));
+      // Quantize using threshold (for 2 levels: compare to threshold)
+      const quantizedValue = gray > threshold ? 255 : 0;
       
       // Calculate error
       const error = gray - quantizedValue;
@@ -89,8 +123,13 @@ export function applyFloydSteinbergDithering(imageData, levels = 2) {
 /**
  * Apply ordered dithering (Bayer matrix) to ImageData
  * Alternative dithering method
+ * @param {ImageData} imageData - The image data to dither
+ * @param {number} levels - Number of quantization levels (default: 2)
+ * @param {number} threshold - Threshold for quantization (0-255, default: 128)
+ * @param {number} contrast - Contrast adjustment (-100 to 100, default: 0)
+ * @param {number} brightness - Brightness adjustment (-100 to 100, default: 0)
  */
-export function applyOrderedDithering(imageData, levels = 2) {
+export function applyOrderedDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0) {
   const data = imageData.data;
   const width = imageData.width;
   const height = imageData.height;
@@ -106,15 +145,16 @@ export function applyOrderedDithering(imageData, levels = 2) {
     [15, 7, 13, 5]
   ];
   const matrixSize = 4;
-  const threshold = 16;
+  const matrixThreshold = 16;
   
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = (y * width + x) * 4;
       
-      const r = data[idx];
-      const g = data[idx + 1];
-      const b = data[idx + 2];
+      // Apply contrast and brightness to each RGB channel
+      let r = applyBrightness(applyContrast(data[idx], contrast), brightness);
+      let g = applyBrightness(applyContrast(data[idx + 1], contrast), brightness);
+      let b = applyBrightness(applyContrast(data[idx + 2], contrast), brightness);
       
       // Convert to grayscale
       const gray = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -123,10 +163,11 @@ export function applyOrderedDithering(imageData, levels = 2) {
       const matrixX = x % matrixSize;
       const matrixY = y % matrixSize;
       const matrixValue = bayerMatrix[matrixY][matrixX];
-      const thresholdValue = (matrixValue / threshold) * 255;
+      const thresholdValue = (matrixValue / matrixThreshold) * 255;
       
-      // Quantize based on threshold
-      const quantized = gray > thresholdValue ? 255 : 0;
+      // Quantize based on threshold (adjusted by user threshold)
+      const adjustedThreshold = threshold + (thresholdValue - 128);
+      const quantized = gray > adjustedThreshold ? 255 : 0;
       
       outputData[idx] = quantized;
       outputData[idx + 1] = quantized;
