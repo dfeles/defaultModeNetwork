@@ -9,11 +9,65 @@ import ControlPanel from './components/ControlPanel';
 import ExportPanel from './components/ExportPanel';
 import { exportSceneToSVG, downloadSVG, exportImageToSVG } from './utils/svgExporter';
 import { getSTLFileURL, getImageFileURL } from './config/stlFiles';
-import { applyFloydSteinbergDithering } from './utils/dithering';
+import { applyFloydSteinbergDithering, applyOrderedDithering } from './utils/dithering';
 import { saveState, loadState, saveLoadedImages, loadLoadedImages } from './utils/statePersistence';
 
 import { DevOverlay } from 'mindone'
 import './App.css';
+
+// Helper function to generate rainbow colors (always includes black and white)
+function generateRainbowColors(count) {
+  if (count <= 2) {
+    return ['#000000', '#ffffff']; // Black and white
+  }
+  
+  // Always start with black and white
+  const colors = ['#000000'];
+  
+  // Generate rainbow colors for the remaining slots
+  const remainingCount = count - 2; // Subtract 2 for black and white
+  for (let i = 0; i < remainingCount; i++) {
+    const hue = (i / remainingCount) * 360;
+    const saturation = 100;
+    const lightness = 50;
+    
+    // Convert HSL to RGB
+    const h = hue / 360;
+    const s = saturation / 100;
+    const l = lightness / 100;
+    
+    let r, g, b;
+    if (s === 0) {
+      r = g = b = l;
+    } else {
+      const hue2rgb = (p, q, t) => {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1/6) return p + (q - p) * 6 * t;
+        if (t < 1/2) return q;
+        if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+        return p;
+      };
+      
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      r = Math.round(hue2rgb(p, q, h + 1/3) * 255);
+      g = Math.round(hue2rgb(p, q, h) * 255);
+      b = Math.round(hue2rgb(p, q, h - 1/3) * 255);
+    }
+    
+    const hex = '#' + [r, g, b].map(x => {
+      const hex = x.toString(16);
+      return hex.length === 1 ? '0' + hex : hex;
+    }).join('');
+    colors.push(hex);
+  }
+  
+  // Always end with white
+  colors.push('#ffffff');
+  
+  return colors;
+}
 
 function SceneExporter({ meshData, edgeSettings, onExport, onSVGGenerated, applyDithering }) {
   const { scene, camera, gl, size } = useThree();
@@ -51,8 +105,13 @@ function ImageExporter({ imageData, onExport, onSVGGenerated, applyDithering, ex
           imageWidth: imageData.width,
           imageHeight: imageData.height,
           applyDithering,
+          ditheringColorCount: applyDithering ? ditheringColorCount : undefined,
+          ditheringColorPalette: applyDithering && ditheringColorCount > 2 ? ditheringColorPalette : undefined,
+          ditheringMethod: applyDithering ? ditheringMethod : undefined,
           exportMode,
-          pixelFilter
+          pixelFilter,
+          strokeColor: strokeColor || undefined,
+          strokeWidth: strokeColor ? strokeWidth : undefined
         });
         onSVGGenerated(svgString);
       };
@@ -98,11 +157,45 @@ function App() {
   const [ditheringThreshold, setDitheringThreshold] = useState(128); // Threshold for dithering (0-255)
   const [ditheringContrast, setDitheringContrast] = useState(0); // Contrast adjustment (-100 to 100)
   const [ditheringBrightness, setDitheringBrightness] = useState(0); // Brightness adjustment (-100 to 100)
+  const [ditheringColorCount, setDitheringColorCount] = useState(2); // Number of colors (default: 2 for B&W)
+  const [ditheringColorPalette, setDitheringColorPalette] = useState(['#000000', '#ffffff']); // Color palette array
   const [viewMode, setViewMode] = useState('svg'); // '3d' or 'svg' - start with svg for images
+
+  // Update palette when color count changes
+  useEffect(() => {
+    if (ditheringColorCount === 2) {
+      setDitheringColorPalette(['#000000', '#ffffff']);
+    } else if (ditheringColorPalette.length !== ditheringColorCount) {
+      // Generate rainbow colors if palette doesn't match count
+      // Always includes black and white
+      const newPalette = generateRainbowColors(ditheringColorCount);
+      setDitheringColorPalette(newPalette);
+    } else {
+      // Ensure black and white are always present (first and last positions)
+      const updatedPalette = [...ditheringColorPalette];
+      let needsUpdate = false;
+      if (updatedPalette[0] !== '#000000') {
+        updatedPalette[0] = '#000000';
+        needsUpdate = true;
+      }
+      if (updatedPalette[updatedPalette.length - 1] !== '#ffffff') {
+        updatedPalette[updatedPalette.length - 1] = '#ffffff';
+        needsUpdate = true;
+      }
+      // Only update if something changed
+      if (needsUpdate) {
+        setDitheringColorPalette(updatedPalette);
+      }
+    }
+  }, [ditheringColorCount, ditheringColorPalette.length]);
   const [exportMode, setExportMode] = useState('optimized'); // 'optimized' or 'simple' (for images)
   const [stlExportMode, setStlExportMode] = useState('geometric'); // 'geometric' or 'shader' (for 3D)
   const [pixelFilter, setPixelFilter] = useState('both'); // 'white', 'black', or 'both'
   const [renderBackground, setRenderBackground] = useState(true); // Whether to render background in SVG
+  const [strokeColor, setStrokeColor] = useState(null); // Stroke color (null = no stroke, hex string = stroke color)
+  const [strokeWidth, setStrokeWidth] = useState(0.5); // Stroke width in SVG units
+  const [ditheringGradient, setDitheringGradient] = useState(50); // Gradient control (0-100, 50 = linear)
+  const [ditheringMethod, setDitheringMethod] = useState('floyd-steinberg'); // 'floyd-steinberg' or 'ordered'
   const [isDragging, setIsDragging] = useState(false);
   const [initialScale, setInitialScale] = useState(0.5); // Start with a smaller default scale
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
@@ -113,8 +206,9 @@ function App() {
   const loadedImagesRef = useRef([]);
   const previewContainerRef = useRef(null);
   const transformRef = useRef(null);
-  const hasCenteredInitialViewRef = useRef(false); // Track if we've done initial centering
+  const hasCenteredInitialViewRef = useRef(false); // Track if we've done initial centering for this image
   const currentImageKeyRef = useRef(null); // Track current image to detect image changes
+  const lastPreviewUrlRef = useRef(null); // Track last preview URL to detect preview changes
 
   const handleFileUpload = (file, mode, isExistingSelection = false) => {
     setIsLoading(true);
@@ -311,8 +405,10 @@ function App() {
     };
   }, [imageData]);
 
-  // Center the view only when a new image loads (not on every preview update)
+  // Center the view when a new image loads or when preview updates
   useEffect(() => {
+    const currentPreviewUrl = processedPreviewUrl || imagePreviewUrl;
+    
     // Only center on initial load of a new image, not on preview updates
     const imageKey = imageFile?.name || imageFile?.size;
     const isNewImage = imageKey && imageKey !== currentImageKeyRef.current;
@@ -321,24 +417,31 @@ function App() {
       // Reset the centering flag for new image
       hasCenteredInitialViewRef.current = false;
       currentImageKeyRef.current = imageKey;
+      lastPreviewUrlRef.current = null; // Reset preview URL tracking for new image
     }
     
-    if ((processedPreviewUrl || imagePreviewUrl) && transformRef.current?.centerView && !hasCenteredInitialViewRef.current) {
+    // Check if preview URL has changed (new image or settings changed)
+    const previewChanged = currentPreviewUrl && currentPreviewUrl !== lastPreviewUrlRef.current;
+    
+    if (currentPreviewUrl && transformRef.current?.centerView && (previewChanged || !hasCenteredInitialViewRef.current)) {
+      // Update the last preview URL
+      lastPreviewUrlRef.current = currentPreviewUrl;
+      
       // Use multiple timeouts to ensure the DOM is ready
       const timer1 = setTimeout(() => {
-        if (transformRef.current?.centerView && !hasCenteredInitialViewRef.current) {
+        if (transformRef.current?.centerView) {
           transformRef.current.centerView();
           hasCenteredInitialViewRef.current = true;
         }
       }, 50);
       const timer2 = setTimeout(() => {
-        if (transformRef.current?.centerView && !hasCenteredInitialViewRef.current) {
+        if (transformRef.current?.centerView) {
           transformRef.current.centerView();
           hasCenteredInitialViewRef.current = true;
         }
       }, 200);
       const timer3 = setTimeout(() => {
-        if (transformRef.current?.centerView && !hasCenteredInitialViewRef.current) {
+        if (transformRef.current?.centerView) {
           transformRef.current.centerView();
           hasCenteredInitialViewRef.current = true;
         }
@@ -391,12 +494,15 @@ function App() {
           // Apply dithering if requested (on downsampled image)
           if (applyDithering) {
             const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
-            const ditheredData = applyFloydSteinbergDithering(
+            const ditherFunction = ditheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
+            const ditheredData = ditherFunction(
               imageDataObj, 
-              2, 
+              ditheringColorCount, 
               ditheringThreshold, 
               ditheringContrast, 
-              ditheringBrightness
+              ditheringBrightness,
+              ditheringColorCount > 2 ? ditheringColorPalette : null,
+              ditheringGradient
             );
             processCtx.putImageData(ditheredData, 0, 0);
           }
@@ -604,10 +710,16 @@ function App() {
       setDitheringThreshold(savedState.ditheringThreshold || 128);
       setDitheringContrast(savedState.ditheringContrast || 0);
       setDitheringBrightness(savedState.ditheringBrightness || 0);
+      setDitheringColorCount(savedState.ditheringColorCount || 2);
+      setDitheringColorPalette(savedState.ditheringColorPalette || ['#000000', '#ffffff']);
+      setDitheringGradient(savedState.ditheringGradient || 50);
+      setDitheringMethod(savedState.ditheringMethod || 'floyd-steinberg');
       setExportMode(savedState.exportMode || 'optimized');
       setStlExportMode(savedState.stlExportMode || 'geometric');
       setPixelFilter(savedState.pixelFilter || 'both');
       setRenderBackground(savedState.renderBackground !== undefined ? savedState.renderBackground : true);
+      setStrokeColor(savedState.strokeColor || null);
+      setStrokeWidth(savedState.strokeWidth || 0.5);
       setInitialScale(savedState.initialScale || 0.5);
       
       // Restore loaded images metadata (without file objects)
@@ -683,10 +795,16 @@ function App() {
       ditheringThreshold,
       ditheringContrast,
       ditheringBrightness,
+      ditheringColorCount,
+      ditheringColorPalette,
+      ditheringGradient,
+      ditheringMethod,
       exportMode,
       stlExportMode,
       pixelFilter,
       renderBackground,
+      strokeColor,
+      strokeWidth,
       initialScale
     });
   }, [
@@ -701,10 +819,14 @@ function App() {
     ditheringThreshold,
     ditheringContrast,
     ditheringBrightness,
+    ditheringColorCount,
+    ditheringColorPalette,
       exportMode,
       stlExportMode,
       pixelFilter,
       renderBackground,
+      strokeColor,
+      strokeWidth,
       initialScale,
       isStateLoaded
   ]);
@@ -752,9 +874,15 @@ function App() {
             ditheringThreshold: applyDithering ? ditheringThreshold : undefined,
             ditheringContrast: applyDithering ? ditheringContrast : undefined,
             ditheringBrightness: applyDithering ? ditheringBrightness : undefined,
+            ditheringColorCount: applyDithering ? ditheringColorCount : undefined,
+            ditheringColorPalette: applyDithering && ditheringColorCount > 2 ? ditheringColorPalette : undefined,
+            ditheringGradient: applyDithering && ditheringColorCount > 2 ? ditheringGradient : undefined,
+            ditheringMethod: applyDithering ? ditheringMethod : undefined,
             exportMode,
             pixelFilter,
-            renderBackground
+            renderBackground,
+            strokeColor: strokeColor || undefined,
+            strokeWidth: strokeColor ? strokeWidth : undefined
           });
           
           const endTime = performance.now();
@@ -881,6 +1009,26 @@ function App() {
                 setDitheringBrightness(brightness);
                 setGeneratedSVG(null); // Clear SVG when brightness changes
               }}
+              ditheringColorCount={ditheringColorCount}
+              onDitheringColorCountChange={(count) => {
+                setDitheringColorCount(count);
+                setGeneratedSVG(null); // Clear SVG when color count changes
+              }}
+              ditheringColorPalette={ditheringColorPalette}
+              onDitheringColorPaletteChange={(palette) => {
+                setDitheringColorPalette(palette);
+                setGeneratedSVG(null); // Clear SVG when palette changes
+              }}
+              ditheringGradient={ditheringGradient}
+              onDitheringGradientChange={(gradient) => {
+                setDitheringGradient(gradient);
+                setGeneratedSVG(null); // Clear SVG when gradient changes
+              }}
+              ditheringMethod={ditheringMethod}
+              onDitheringMethodChange={(method) => {
+                setDitheringMethod(method);
+                setGeneratedSVG(null); // Clear SVG when method changes
+              }}
               exportMode={exportMode}
               onExportModeChange={(mode) => {
                 setExportMode(mode);
@@ -900,6 +1048,16 @@ function App() {
               onRenderBackgroundChange={(enabled) => {
                 setRenderBackground(enabled);
                 setGeneratedSVG(null); // Clear SVG when background setting changes
+              }}
+              strokeColor={strokeColor}
+              onStrokeColorChange={(color) => {
+                setStrokeColor(color);
+                setGeneratedSVG(null); // Clear SVG when stroke color changes
+              }}
+              strokeWidth={strokeWidth}
+              onStrokeWidthChange={(width) => {
+                setStrokeWidth(width);
+                setGeneratedSVG(null); // Clear SVG when stroke width changes
               }}
             />
           </div>
@@ -1093,6 +1251,26 @@ function App() {
           setDitheringBrightness(brightness);
           setGeneratedSVG(null); // Clear SVG when brightness changes
         }}
+        ditheringColorCount={ditheringColorCount}
+        onDitheringColorCountChange={(count) => {
+          setDitheringColorCount(count);
+          setGeneratedSVG(null); // Clear SVG when color count changes
+        }}
+        ditheringColorPalette={ditheringColorPalette}
+        onDitheringColorPaletteChange={(palette) => {
+          setDitheringColorPalette(palette);
+          setGeneratedSVG(null); // Clear SVG when palette changes
+        }}
+        ditheringGradient={ditheringGradient}
+        onDitheringGradientChange={(gradient) => {
+          setDitheringGradient(gradient);
+          setGeneratedSVG(null); // Clear SVG when gradient changes
+        }}
+        ditheringMethod={ditheringMethod}
+        onDitheringMethodChange={(method) => {
+          setDitheringMethod(method);
+          setGeneratedSVG(null); // Clear SVG when method changes
+        }}
               exportMode={exportMode}
               onExportModeChange={(mode) => {
                 setExportMode(mode);
@@ -1112,6 +1290,16 @@ function App() {
         onRenderBackgroundChange={(enabled) => {
           setRenderBackground(enabled);
           setGeneratedSVG(null); // Clear SVG when background setting changes
+        }}
+        strokeColor={strokeColor}
+        onStrokeColorChange={(color) => {
+          setStrokeColor(color);
+          setGeneratedSVG(null); // Clear SVG when stroke color changes
+        }}
+        strokeWidth={strokeWidth}
+        onStrokeWidthChange={(width) => {
+          setStrokeWidth(width);
+          setGeneratedSVG(null); // Clear SVG when stroke width changes
         }}
       />
     </div>

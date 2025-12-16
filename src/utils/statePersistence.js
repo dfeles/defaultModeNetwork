@@ -31,10 +31,16 @@ export function saveState(state) {
       ditheringThreshold: state.ditheringThreshold,
       ditheringContrast: state.ditheringContrast,
       ditheringBrightness: state.ditheringBrightness,
+      ditheringColorCount: state.ditheringColorCount,
+      ditheringColorPalette: state.ditheringColorPalette,
+      ditheringGradient: state.ditheringGradient,
+      ditheringMethod: state.ditheringMethod,
       
       // Export settings
       exportMode: state.exportMode,
       pixelFilter: state.pixelFilter,
+      strokeColor: state.strokeColor,
+      strokeWidth: state.strokeWidth,
       
       // View settings
       initialScale: state.initialScale,
@@ -124,3 +130,4 @@ export function loadLoadedImages() {
     return null;
   }
 }
+

@@ -147,6 +147,32 @@ function DraggableNumberInput({ value, onChange, min, max, step = 1, unit = '', 
     // Don't prevent default for other keys (arrow keys, etc.)
   };
 
+  const handleWheel = (e) => {
+    // Only adjust if input is not focused (to avoid conflicts with text editing)
+    if (isFocused || document.activeElement === inputRef.current) {
+      return;
+    }
+    
+    // Prevent page scroll when hovering over input
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Calculate delta (normalize for different browsers)
+    const delta = e.deltaY > 0 ? -step : step;
+    
+    // Apply sensitivity based on step size
+    const sensitivity = step < 1 ? 0.1 : 1;
+    const adjustedDelta = delta * sensitivity;
+    
+    let newValue = value + adjustedDelta;
+    
+    // Clamp to min/max
+    if (min !== undefined) newValue = Math.max(min, newValue);
+    if (max !== undefined) newValue = Math.min(max, newValue);
+    
+    onChange(newValue);
+  };
+
   return (
     <div className="draggable-input-wrapper">
       <div className="draggable-input-row">
@@ -161,6 +187,7 @@ function DraggableNumberInput({ value, onChange, min, max, step = 1, unit = '', 
             onBlur={handleBlur}
             onKeyDown={handleKeyDown}
             onMouseDown={handleMouseDown}
+            onWheel={handleWheel}
             className={`draggable-input ${isDragging ? 'dragging' : ''}`}
           />
           {unit && <span className="input-unit">{unit}</span>}
@@ -170,7 +197,7 @@ function DraggableNumberInput({ value, onChange, min, max, step = 1, unit = '', 
   );
 }
 
-function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange, ditheringResolution, onDitheringResolutionChange, ditheringThreshold, onDitheringThresholdChange, ditheringContrast, onDitheringContrastChange, ditheringBrightness, onDitheringBrightnessChange, exportMode, onExportModeChange, stlExportMode, onStlExportModeChange, pixelFilter, onPixelFilterChange, renderBackground, onRenderBackgroundChange }) {
+function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange, ditheringResolution, onDitheringResolutionChange, ditheringThreshold, onDitheringThresholdChange, ditheringContrast, onDitheringContrastChange, ditheringBrightness, onDitheringBrightnessChange, ditheringColorCount, onDitheringColorCountChange, ditheringColorPalette, onDitheringColorPaletteChange, ditheringGradient, onDitheringGradientChange, ditheringMethod, onDitheringMethodChange, exportMode, onExportModeChange, stlExportMode, onStlExportModeChange, pixelFilter, onPixelFilterChange, renderBackground, onRenderBackgroundChange, strokeColor, onStrokeColorChange, strokeWidth, onStrokeWidthChange }) {
   const hasContent = hasMesh || hasImage;
   const [isExportExpanded, setIsExportExpanded] = useState(false);
 
@@ -269,6 +296,74 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
                 </button>
               </div>
               <div className="dithering-settings">
+                <div className="control-group">
+                  <div className="control-row">
+                    <div className="control-label">Method</div>
+                    <select
+                      value={ditheringMethod}
+                      onChange={(e) => onDitheringMethodChange(e.target.value)}
+                      className="export-select"
+                      style={{ flex: 1, marginTop: 0 }}
+                    >
+                      <option value="floyd-steinberg">Floyd-Steinberg</option>
+                      <option value="ordered">Ordered (Bayer)</option>
+                    </select>
+                  </div>
+                </div>
+                
+                <div className="control-group">
+                  <DraggableNumberInput
+                    value={ditheringColorCount}
+                    onChange={(val) => {
+                      onDitheringColorCountChange(parseInt(val));
+                    }}
+                    min={2}
+                    max={20}
+                    step={1}
+                    label="Colors"
+                  />
+                </div>
+                
+                {ditheringColorCount > 2 && (
+                  <div className="control-group">
+                    <DraggableNumberInput
+                      value={ditheringGradient}
+                      onChange={(val) => {
+                        onDitheringGradientChange(parseInt(val));
+                      }}
+                      min={0}
+                      max={100}
+                      step={1}
+                      label="Gradient"
+                    />
+                    <small style={{ display: 'block', marginTop: '6px', color: '#666', fontSize: '11px' }}>
+                      {ditheringGradient < 50 ? 'More black early' : ditheringGradient > 50 ? 'More white early' : 'Linear distribution'}
+                    </small>
+                  </div>
+                )}
+                
+                {ditheringColorCount > 2 && ditheringColorPalette && (
+                  <div className="control-group">
+                    <div className="control-label" style={{ marginBottom: '8px' }}>Color Palette</div>
+                    <div className="color-palette-grid">
+                      {ditheringColorPalette.map((color, index) => (
+                        <div key={index} className="color-palette-item">
+                          <input
+                            type="color"
+                            value={color}
+                            onChange={(e) => {
+                              const newPalette = [...ditheringColorPalette];
+                              newPalette[index] = e.target.value;
+                              onDitheringColorPaletteChange(newPalette);
+                            }}
+                            className="color-palette-picker"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
                 <div className="control-group">
                   <DraggableNumberInput
                     value={ditheringResolution}
@@ -417,6 +512,44 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
                     />
                   </div>
                 </div>
+
+                <div className="control-group">
+                  <div className="control-row">
+                    <div className="control-label">Stroke Color</div>
+                    <input
+                      type="color"
+                      value={strokeColor || '#000000'}
+                      onChange={(e) => onStrokeColorChange(e.target.value)}
+                    />
+                    <button
+                      style={{
+                        padding: '4px 8px',
+                        background: strokeColor ? '#1a1a1a' : '#2a2a2a',
+                        border: '1px solid #2a2a2a',
+                        borderRadius: '4px',
+                        color: '#fff',
+                        cursor: 'pointer',
+                        fontSize: '11px'
+                      }}
+                      onClick={() => onStrokeColorChange(strokeColor ? null : '#000000')}
+                    >
+                      {strokeColor ? 'Disable' : 'Enable'}
+                    </button>
+                  </div>
+                </div>
+
+                {strokeColor && (
+                  <div className="control-group">
+                    <DraggableNumberInput
+                      value={strokeWidth}
+                      onChange={(val) => onStrokeWidthChange(val)}
+                      min={0.1}
+                      max={5}
+                      step={0.1}
+                      label="Stroke Width"
+                    />
+                  </div>
+                )}
               </>
             )}
             

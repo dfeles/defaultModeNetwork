@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { applyFloydSteinbergDithering } from './dithering';
+import { applyFloydSteinbergDithering, applyOrderedDithering } from './dithering';
 
 /**
  * Get color band from pixel color (for shading)
@@ -1526,9 +1526,15 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     ditheringThreshold = 128,
     ditheringContrast = 0,
     ditheringBrightness = 0,
+    ditheringColorCount = 2,
+    ditheringColorPalette = null,
+    ditheringGradient = 50, // Gradient control (0-100)
+    ditheringMethod = 'floyd-steinberg', // 'floyd-steinberg' or 'ordered'
     exportMode = 'optimized', // 'optimized' or 'simple'
     pixelFilter = 'both', // 'white', 'black', or 'both'
-    renderBackground = true // Whether to render background rectangle
+    renderBackground = true, // Whether to render background rectangle
+    strokeColor = null, // Stroke color (null/undefined = no stroke, hex color string = stroke color)
+    strokeWidth = 0.5 // Stroke width in SVG units
   } = options;
 
   // Create SVG header
@@ -1603,12 +1609,15 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     let processedImageData = imageData;
     if (applyDithering) {
       console.log(`Applying Floyd-Steinberg dithering to ${processWidth}x${processHeight} image...`);
-      processedImageData = applyFloydSteinbergDithering(
+      const ditherFunction = ditheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
+      processedImageData = ditherFunction(
         imageData, 
-        2, 
+        ditheringColorCount, 
         ditheringThreshold, 
         ditheringContrast, 
-        ditheringBrightness
+        ditheringBrightness,
+        ditheringColorCount > 2 ? ditheringColorPalette : null,
+        ditheringGradient
       );
     }
     
@@ -1716,24 +1725,67 @@ export function exportImageToSVG(texture, renderer, options = {}) {
       dotsByColor.get(pixel.color).push(pixel);
     });
     
+    console.log(`Grouped ${pixels.length} pixels into ${dotsByColor.size} color groups`);
+    
+    // Helper function to create a valid SVG ID from hex color
+    const colorToId = (hexColor) => {
+      // Remove # and convert to lowercase, replace invalid characters
+      // SVG IDs must start with a letter or underscore, and contain only letters, digits, hyphens, underscores, and periods
+      const clean = hexColor.replace('#', '').toLowerCase();
+      return `color-${clean}`;
+    };
+    
     // Add shapes to SVG, grouped by color for efficiency
     // Build SVG string in chunks to avoid memory issues
+    let colorIndex = 0;
     dotsByColor.forEach((dots, color) => {
-      svg += `  <g fill="${color}" stroke="none">\n`;
+      const groupId = colorToId(color);
+      const groupName = `color-group-${colorIndex}`;
+      
+      // When stroke is enabled: no fill, only stroke, and make rectangles smaller
+      const hasStroke = !!strokeColor;
+      const fillAttr = hasStroke ? 'fill="none"' : `fill="${color}"`;
+      const strokeAttr = hasStroke ? `stroke="${strokeColor}" stroke-width="${strokeWidth}"` : 'stroke="none"';
+      
+      svg += `  <g id="${groupId}" data-name="${groupName}" ${fillAttr} ${strokeAttr}>\n`;
+      colorIndex++;
       
       if (dots.length > 0 && dots[0].isRect) {
         if (exportMode === 'simple') {
-          // Simple mode: no optimization, just render pixels directly as rectangles
-          console.log(`Simple mode: rendering ${dots.length} pixels directly (no optimization)...`);
+          // Simple mode: group rectangles by color but render individually
+          console.log(`Simple mode: rendering ${dots.length} pixels for color ${color}...`);
           
-          // Output as individual rectangles without any merging
+          // Output as individual rectangles grouped by color
           dots.forEach(pixel => {
-            svg += `    <rect x="${pixel.x.toFixed(2)}" y="${pixel.y.toFixed(2)}" width="${pixel.width.toFixed(2)}" height="${pixel.height.toFixed(2)}"/>\n`;
+            if (hasStroke) {
+              // Make rectangles smaller when stroke is enabled (inset by half stroke width)
+              const inset = strokeWidth / 2;
+              const smallerX = pixel.x + inset;
+              const smallerY = pixel.y + inset;
+              const smallerWidth = Math.max(0, pixel.width - strokeWidth);
+              const smallerHeight = Math.max(0, pixel.height - strokeWidth);
+              svg += `    <rect x="${smallerX.toFixed(2)}" y="${smallerY.toFixed(2)}" width="${smallerWidth.toFixed(2)}" height="${smallerHeight.toFixed(2)}"/>\n`;
+            } else {
+              svg += `    <rect x="${pixel.x.toFixed(2)}" y="${pixel.y.toFixed(2)}" width="${pixel.width.toFixed(2)}" height="${pixel.height.toFixed(2)}"/>\n`;
+            }
           });
         } else {
           // Optimized mode (VIP): merge rectangles, then flatten to single path
           console.log(`Optimized mode: merging ${dots.length} rectangles for color ${color}...`);
-          const mergedRects = mergeRectangles(dots);
+          
+          // When stroke is enabled, make rectangles smaller before merging
+          let rectsToMerge = dots;
+          if (hasStroke) {
+            const inset = strokeWidth / 2;
+            rectsToMerge = dots.map(pixel => ({
+              x: pixel.x + inset,
+              y: pixel.y + inset,
+              width: Math.max(0, pixel.width - strokeWidth),
+              height: Math.max(0, pixel.height - strokeWidth)
+            }));
+          }
+          
+          const mergedRects = mergeRectangles(rectsToMerge);
           console.log(`Merged to ${mergedRects.length} rectangles (${((1 - mergedRects.length / dots.length) * 100).toFixed(1)}% reduction)`);
           
           // Flatten all rectangles into a single path (union)
@@ -1747,18 +1799,19 @@ export function exportImageToSVG(texture, renderer, options = {}) {
               finalPath += ' Z';
             }
             // Output as a single path element with fill-rule for proper rendering
-            svg += `    <path d="${finalPath}" fill-rule="evenodd" fill="${color}"/>\n`;
-            console.log(`  Flattened to single path`);
+            svg += `    <path d="${finalPath}" fill-rule="evenodd"/>\n`;
+            console.log(`  Flattened to single path for color ${color}`);
           } else {
             // Fallback: output as individual rectangles if flattening fails
             // Each rectangle is already a closed shape
             mergedRects.forEach(rect => {
-              svg += `    <rect x="${rect.x.toFixed(2)}" y="${rect.y.toFixed(2)}" width="${rect.width.toFixed(2)}" height="${rect.height.toFixed(2)}" fill="${color}"/>\n`;
+              svg += `    <rect x="${rect.x.toFixed(2)}" y="${rect.y.toFixed(2)}" width="${rect.width.toFixed(2)}" height="${rect.height.toFixed(2)}"/>\n`;
             });
           }
         }
       } else {
-        // For non-dithered images: use circles (no merging needed)
+        // For non-dithered images: group circles by color
+        console.log(`Rendering ${dots.length} circles for color ${color}...`);
         dots.forEach(dot => {
           svg += `    <circle cx="${dot.x.toFixed(1)}" cy="${dot.y.toFixed(1)}" r="${(dotRadius / scaleFactor).toFixed(2)}"/>\n`;
         });
