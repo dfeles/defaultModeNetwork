@@ -69,7 +69,7 @@ function generateRainbowColors(count) {
   return colors;
 }
 
-function SceneExporter({ meshData, edgeSettings, onExport, onSVGGenerated, applyDithering }) {
+function SceneExporter({ meshData, edgeSettings, onExport, onSVGGenerated, applyDithering, stlExportMode }) {
   const { scene, camera, gl, size } = useThree();
   
   React.useEffect(() => {
@@ -80,7 +80,8 @@ function SceneExporter({ meshData, edgeSettings, onExport, onSVGGenerated, apply
           height: size.height,
           edgeSettings,
           meshData,
-          applyDithering
+          applyDithering,
+          wireframeMode: stlExportMode === 'wireframe'
         });
         onSVGGenerated(svgString);
       };
@@ -88,7 +89,7 @@ function SceneExporter({ meshData, edgeSettings, onExport, onSVGGenerated, apply
       // Store generate function
       window.generateSVG = generateFn;
     }
-  }, [scene, camera, gl, size, meshData, edgeSettings, onExport, onSVGGenerated, applyDithering]);
+  }, [scene, camera, gl, size, meshData, edgeSettings, onExport, onSVGGenerated, applyDithering, stlExportMode]);
   
   return null;
 }
@@ -212,6 +213,15 @@ function App() {
 
   const handleFileUpload = (file, mode, isExistingSelection = false) => {
     setIsLoading(true);
+    
+    // Clean up previous resources to free memory
+    if (imageData?.texture) {
+      imageData.texture.dispose();
+    }
+    if (meshData?.geometry) {
+      meshData.geometry.dispose();
+    }
+    
     setMeshData(null); // Clear previous mesh data
     setImageData(null); // Clear previous image data
     setImagePreviewUrl(null); // Clear previous image preview
@@ -250,12 +260,25 @@ function App() {
       } else {
         // New upload - add to top of loaded images list
         setLoadedImages(prev => {
+          // Limit the number of loaded images to prevent memory issues
+          const MAX_LOADED_IMAGES = 100;
+          const trimmed = prev.slice(0, MAX_LOADED_IMAGES - 1);
+          
+          // Revoke thumbnail URLs for images that will be removed
+          if (prev.length >= MAX_LOADED_IMAGES) {
+            prev.slice(MAX_LOADED_IMAGES - 1).forEach(img => {
+              if (img.thumbnailUrl) {
+                URL.revokeObjectURL(img.thumbnailUrl);
+              }
+            });
+          }
+          
           // Check if image with same name already exists
-          const existingIndex = prev.findIndex(img => img.name === file.name);
+          const existingIndex = trimmed.findIndex(img => img.name === file.name);
           let result;
           if (existingIndex !== -1) {
             // Remove existing entry and add to top with updated file reference
-            const updated = [...prev];
+            const updated = [...trimmed];
             const existing = updated.splice(existingIndex, 1)[0];
             // Update the file reference in case it's a new file object
             existing.file = file;
@@ -275,7 +298,7 @@ function App() {
               id: Date.now(), // Simple ID for React keys
               thumbnailUrl: thumbnailUrl
             };
-            result = [imageEntry, ...prev];
+            result = [imageEntry, ...trimmed];
           }
           loadedImagesRef.current = result;
           return result;
@@ -337,6 +360,15 @@ function App() {
   };
 
   const handleImageLoaded = (data) => {
+    // Clean up previous preview URLs to free memory
+    if (imagePreviewUrl && imagePreviewUrl.startsWith('data:')) {
+      // Data URLs can't be revoked, but we can clear the reference
+      // The browser will garbage collect when no longer referenced
+    }
+    if (processedPreviewUrl && processedPreviewUrl.startsWith('data:')) {
+      // Same for processed preview
+    }
+    
     setImageData(data);
     setIsLoading(false);
     // Automatically switch to 2D mode when image loads
@@ -369,8 +401,12 @@ function App() {
       canvas.height = data.height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(data.texture.image, 0, 0);
-      const previewUrl = canvas.toDataURL('image/png');
+      const previewUrl = canvas.toDataURL('image/jpeg', 0.85); // Use JPEG with compression to reduce memory
       setImagePreviewUrl(previewUrl);
+      
+      // Clean up canvas after use
+      canvas.width = 0;
+      canvas.height = 0;
     }
   };
 
@@ -458,8 +494,14 @@ function App() {
   // Generate preview image when image data or dithering settings change (fast preview)
   // This only generates a preview image, NOT SVG
   useEffect(() => {
+    let cancelled = false;
+    let processCanvas = null;
+    let displayCanvas = null;
+    
     if (inputMode === 'image' && imageData && imageData.texture && imageData.texture.image) {
       const generatePreview = () => {
+        if (cancelled) return;
+        
         try {
           // For dithering, downsample first, then apply dithering, then scale back up for display
           let processWidth = imageData.width;
@@ -483,7 +525,7 @@ function App() {
           }
           
           // Create a temporary canvas for processing
-          const processCanvas = document.createElement('canvas');
+          processCanvas = document.createElement('canvas');
           processCanvas.width = processWidth;
           processCanvas.height = processHeight;
           const processCtx = processCanvas.getContext('2d');
@@ -492,10 +534,12 @@ function App() {
           processCtx.drawImage(imageData.texture.image, 0, 0, processWidth, processHeight);
           
           // Apply dithering if requested (on downsampled image)
+          let imageDataObj = null;
+          let ditheredData = null;
           if (applyDithering) {
-            const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
+            imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
             const ditherFunction = ditheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
-            const ditheredData = ditherFunction(
+            ditheredData = ditherFunction(
               imageDataObj, 
               ditheringColorCount, 
               ditheringThreshold, 
@@ -507,8 +551,17 @@ function App() {
             processCtx.putImageData(ditheredData, 0, 0);
           }
           
+          if (cancelled) {
+            // Clean up if cancelled
+            if (processCanvas) {
+              processCanvas.width = 0;
+              processCanvas.height = 0;
+            }
+            return;
+          }
+          
           // Create display canvas (original size for preview)
-          const displayCanvas = document.createElement('canvas');
+          displayCanvas = document.createElement('canvas');
           displayCanvas.width = imageData.width;
           displayCanvas.height = imageData.height;
           const displayCtx = displayCanvas.getContext('2d');
@@ -516,11 +569,45 @@ function App() {
           // Scale the processed image back up to original size for display
           displayCtx.drawImage(processCanvas, 0, 0, imageData.width, imageData.height);
           
-          // Convert to data URL for preview
-          const previewUrl = displayCanvas.toDataURL('image/png');
+          if (cancelled) {
+            // Clean up if cancelled
+            if (processCanvas) {
+              processCanvas.width = 0;
+              processCanvas.height = 0;
+            }
+            if (displayCanvas) {
+              displayCanvas.width = 0;
+              displayCanvas.height = 0;
+            }
+            return;
+          }
+          
+          // Convert to data URL for preview (use JPEG with compression to reduce memory)
+          const previewUrl = displayCanvas.toDataURL('image/jpeg', 0.85);
           setProcessedPreviewUrl(previewUrl);
+          
+          // Clean up canvases immediately after use
+          if (processCanvas) {
+            processCanvas.width = 0;
+            processCanvas.height = 0;
+          }
+          if (displayCanvas) {
+            displayCanvas.width = 0;
+            displayCanvas.height = 0;
+          }
+          processCanvas = null;
+          displayCanvas = null;
         } catch (error) {
           console.error('Error generating preview:', error);
+          // Clean up on error
+          if (processCanvas) {
+            processCanvas.width = 0;
+            processCanvas.height = 0;
+          }
+          if (displayCanvas) {
+            displayCanvas.width = 0;
+            displayCanvas.height = 0;
+          }
         }
       };
       
@@ -534,7 +621,20 @@ function App() {
       // Clear processed preview if no image
       setProcessedPreviewUrl(null);
     }
-  }, [inputMode, imageData, applyDithering, ditheringResolution, ditheringThreshold, ditheringContrast, ditheringBrightness]);
+    
+    return () => {
+      cancelled = true;
+      // Clean up canvases if still in use
+      if (processCanvas) {
+        processCanvas.width = 0;
+        processCanvas.height = 0;
+      }
+      if (displayCanvas) {
+        displayCanvas.width = 0;
+        displayCanvas.height = 0;
+      }
+    };
+  }, [inputMode, imageData, applyDithering, ditheringResolution, ditheringThreshold, ditheringContrast, ditheringBrightness, ditheringMethod, ditheringColorCount, ditheringColorPalette, ditheringGradient]);
 
 
   const handleDefaultFileSelect = React.useCallback(async (filename) => {
@@ -838,7 +938,7 @@ function App() {
     saveLoadedImages(loadedImages);
   }, [loadedImages, isStateLoaded]);
 
-  // Cleanup thumbnail URLs on unmount
+  // Cleanup thumbnail URLs and resources on unmount
   useEffect(() => {
     return () => {
       // Clean up all thumbnail URLs
@@ -847,6 +947,21 @@ function App() {
           URL.revokeObjectURL(img.thumbnailUrl);
         }
       });
+      
+      // Clean up image data
+      if (imageData?.texture) {
+        imageData.texture.dispose();
+      }
+      
+      // Clean up mesh data
+      if (meshData?.geometry) {
+        meshData.geometry.dispose();
+      }
+      
+      // Clear large state objects
+      setGeneratedSVG(null);
+      setImagePreviewUrl(null);
+      setProcessedPreviewUrl(null);
     };
   }, []);
 
@@ -1111,6 +1226,7 @@ function App() {
                 onExport={exportTriggerRef.current}
                 onSVGGenerated={setGeneratedSVG}
                 applyDithering={applyDithering}
+                stlExportMode={stlExportMode}
               />
             )}
           </Canvas>

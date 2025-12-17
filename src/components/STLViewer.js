@@ -13,10 +13,31 @@ function STLViewer({ file, onMeshLoaded, onError, edgeSettings }) {
   const [geometry, setGeometry] = useState(null);
   const fileRef = useRef(null);
   const isLoadingRef = useRef(false);
+  const previousGeometryRef = useRef(null);
+
+  // Cleanup geometry on unmount or when file changes
+  useEffect(() => {
+    return () => {
+      // Dispose previous geometry when component unmounts or file changes
+      if (previousGeometryRef.current) {
+        previousGeometryRef.current.dispose();
+        previousGeometryRef.current = null;
+      }
+      if (geometry) {
+        geometry.dispose();
+      }
+      // Dispose material if it exists
+      if (materialRef.current) {
+        materialRef.current.dispose();
+        materialRef.current = null;
+      }
+    };
+  }, [geometry]);
 
   useEffect(() => {
     if (!file) {
       if (geometry) {
+        previousGeometryRef.current = geometry;
         setGeometry(null);
       }
       return;
@@ -25,6 +46,12 @@ function STLViewer({ file, onMeshLoaded, onError, edgeSettings }) {
     // Only reset if it's actually a different file
     if (fileRef.current === file) {
       return; // Same file, no need to reload
+    }
+    
+    // Dispose previous geometry before loading new one
+    if (previousGeometryRef.current) {
+      previousGeometryRef.current.dispose();
+      previousGeometryRef.current = null;
     }
     
     // Mark as loading but keep old geometry visible
@@ -85,6 +112,11 @@ function STLViewer({ file, onMeshLoaded, onError, edgeSettings }) {
         const scale = 2 / maxDim;
         stlGeometry.scale(scale, scale, scale);
 
+        // Dispose old geometry before setting new one
+        if (geometry) {
+          previousGeometryRef.current = geometry;
+        }
+        
         // Only update geometry after new one is ready (keeps old one visible during load)
         setGeometry(stlGeometry);
         isLoadingRef.current = false;
@@ -128,6 +160,11 @@ function STLViewer({ file, onMeshLoaded, onError, edgeSettings }) {
         materialRef.current.uniforms.edgeThreshold.value = edgeSettings.threshold;
       }
       if (prev.color !== edgeSettings.color) {
+        // Dispose old color object if it exists
+        const oldColor = materialRef.current.uniforms.edgeColor.value;
+        if (oldColor && oldColor.dispose) {
+          oldColor.dispose();
+        }
         materialRef.current.uniforms.edgeColor.value = new THREE.Color(edgeSettings.color);
       }
       if (prev.width !== edgeSettings.width) {

@@ -455,64 +455,205 @@ function exportSceneToSVGGeometry(scene, camera, renderer, options = {}) {
     const edgesByColor = new Map();
     const numShadingColors = edgeSettings.shadingColors || 1;
     const baseColor = edgeSettings.color || '#000000';
+    const wireframeMode = options.wireframeMode || false;
     
     // Get minimum edge length in 2D space (for filtering) - very aggressive default
     const minEdgeLength2D = edgeSettings.minEdgeLength2D !== undefined ? edgeSettings.minEdgeLength2D : 2.0; // Minimum edge length in pixels
     
-    edgeToFaces.forEach((faces, edgeKey) => {
-      const [v1, v2] = edgeKey.split('-').map(Number);
+    if (wireframeMode) {
+      // Wireframe mode: render all edges of front-facing triangles with lighting-based coloring
+      // Paper.js style lighting: light from top-left, surfaces facing light are white, away are black
+      const lightDirection = new THREE.Vector3(-0.5, 0.5, 1).normalize(); // Top-left light direction
       
-      // Check 2D edge length first (fast rejection)
-      const p1 = vertices2D[v1];
-      const p2 = vertices2D[v2];
-      if (!p1 || !p2) return;
+      // First pass: collect all front-facing face edges with their normals
+      const allEdges = new Map(); // edgeKey -> { faces: [...], normals: [...], depths: [] }
       
-      const edgeLength2D = Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
-      if (edgeLength2D < minEdgeLength2D) return; // Skip very short edges
-      
-      const avgDepth = (depths[v1] + depths[v2]) / 2;
-      
-      let shouldInclude = false;
-      
-      if (faces.length === 1) {
-        // Silhouette edge - check if edge value exceeds threshold
-        if (faces[0].edgeValue > edgeThreshold) {
-          shouldInclude = true;
+      if (indices && indices.count > 0) {
+        const indexArray = indices.array;
+        for (let i = 0; i < indices.count; i += 3) {
+          const i1 = indexArray[i];
+          const i2 = indexArray[i + 1];
+          const i3 = indexArray[i + 2];
+          
+          if (i1 >= depths.length || i2 >= depths.length || i3 >= depths.length) continue;
+          if (!isFrontFacing(i1, i2, i3)) continue;
+          
+          // Calculate face normal
+          const p1 = vertices3D[i1];
+          const p2 = vertices3D[i2];
+          const p3 = vertices3D[i3];
+          const edge1 = new THREE.Vector3().subVectors(p2, p1);
+          const edge2 = new THREE.Vector3().subVectors(p3, p1);
+          const faceNormal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
+          
+          // This face is front-facing, add its edges
+          const faceDepth = (depths[i1] + depths[i2] + depths[i3]) / 3;
+          const edges = [
+            [Math.min(i1, i2), Math.max(i1, i2)],
+            [Math.min(i2, i3), Math.max(i2, i3)],
+            [Math.min(i3, i1), Math.max(i3, i1)]
+          ];
+          
+          edges.forEach(([v1, v2]) => {
+            const edgeKey = `${v1}-${v2}`;
+            if (!allEdges.has(edgeKey)) {
+              allEdges.set(edgeKey, { faces: [], normals: [], depths: [] });
+            }
+            allEdges.get(edgeKey).faces.push([i1, i2, i3]);
+            allEdges.get(edgeKey).normals.push(faceNormal);
+            allEdges.get(edgeKey).depths.push(faceDepth);
+          });
         }
       } else {
-        // Shared edge - check if normals differ significantly (boundary edge)
-        const f1 = faces[0];
-        const f2 = faces[1];
-        const dot = f1.normal.dot(f2.normal);
-        
-        // More aggressive: only include if normals differ significantly (angle > ~45 degrees)
-        // Changed from 0.866 (30°) to 0.707 (45°) to reduce edges
-        if (dot < 0.707) {
-          shouldInclude = true;
+        const triangleCount = Math.floor(positions.count / 3);
+        for (let i = 0; i < triangleCount; i++) {
+          const i1 = i * 3;
+          const i2 = i * 3 + 1;
+          const i3 = i * 3 + 2;
+          
+          if (i1 >= depths.length || i2 >= depths.length || i3 >= depths.length) continue;
+          if (!isFrontFacing(i1, i2, i3)) continue;
+          
+          // Calculate face normal
+          const p1 = vertices3D[i1];
+          const p2 = vertices3D[i2];
+          const p3 = vertices3D[i3];
+          const edge1 = new THREE.Vector3().subVectors(p2, p1);
+          const edge2 = new THREE.Vector3().subVectors(p3, p1);
+          const faceNormal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
+          
+          // This face is front-facing, add its edges
+          const faceDepth = (depths[i1] + depths[i2] + depths[i3]) / 3;
+          const edges = [
+            [Math.min(i1, i2), Math.max(i1, i2)],
+            [Math.min(i2, i3), Math.max(i2, i3)],
+            [Math.min(i3, i1), Math.max(i3, i1)]
+          ];
+          
+          edges.forEach(([v1, v2]) => {
+            const edgeKey = `${v1}-${v2}`;
+            if (!allEdges.has(edgeKey)) {
+              allEdges.set(edgeKey, { faces: [], normals: [], depths: [] });
+            }
+            allEdges.get(edgeKey).faces.push([i1, i2, i3]);
+            allEdges.get(edgeKey).normals.push(faceNormal);
+            allEdges.get(edgeKey).depths.push(faceDepth);
+          });
         }
       }
       
-      if (shouldInclude) {
-        // Calculate color based on depth and shading settings
+      // Second pass: calculate lighting for each edge and assign color
+      allEdges.forEach((edgeData, edgeKey) => {
+        const [v1, v2] = edgeKey.split('-').map(Number);
+        
+        // Check 2D edge length first (fast rejection)
+        const p1 = vertices2D[v1];
+        const p2 = vertices2D[v2];
+        if (!p1 || !p2) return;
+        
+        const edgeLength2D = Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+        if (edgeLength2D < minEdgeLength2D) return; // Skip very short edges
+        
+        // Calculate lighting based on face normals
+        // Average the lighting from all faces sharing this edge
+        let totalLighting = 0;
+        edgeData.normals.forEach(normal => {
+          // Dot product with light direction gives lighting (0 = dark, 1 = bright)
+          // Clamp to 0-1 range and add ambient light (0.2) for better visibility
+          const lighting = Math.max(0, normal.dot(lightDirection));
+          totalLighting += lighting;
+        });
+        const avgLighting = totalLighting / edgeData.normals.length;
+        
+        // Apply ambient light: lighting ranges from 0.2 (dark) to 1.0 (bright)
+        const finalLighting = 0.2 + (avgLighting * 0.8);
+        
+        // Calculate color based on lighting and shading settings
         let color = baseColor;
         if (numShadingColors > 1) {
-          color = getDepthColor(avgDepth, minDepth, maxDepth, numShadingColors, baseColor);
+          // Use lighting to determine color band (0 = black, 1 = white)
+          // Map lighting (0.2-1.0) to color bands
+          const normalizedLighting = (finalLighting - 0.2) / 0.8; // Normalize to 0-1
+          const band = Math.floor(normalizedLighting * numShadingColors);
+          const clampedBand = Math.min(Math.max(0, band), numShadingColors - 1);
+          
+          // Calculate brightness: 0 = black, 1 = white
+          const brightness = 1.0 - (clampedBand / (numShadingColors - 1));
+          
+          // Convert brightness to hex color
+          const gray = Math.floor(brightness * 255);
+          const hex = gray.toString(16).padStart(2, '0');
+          color = `#${hex}${hex}${hex}`;
+        } else {
+          // Single color mode: use base color
+          color = baseColor;
         }
         
         if (!edgesByColor.has(color)) {
           edgesByColor.set(color, []);
         }
         edgesByColor.get(color).push([v1, v2]);
-      }
-    });
+      });
+      
+      console.log(`Wireframe mode: Found ${allEdges.size} unique edges from front-facing faces with lighting-based coloring`);
+    } else {
+      // Original edge detection mode
+      edgeToFaces.forEach((faces, edgeKey) => {
+        const [v1, v2] = edgeKey.split('-').map(Number);
+        
+        // Check 2D edge length first (fast rejection)
+        const p1 = vertices2D[v1];
+        const p2 = vertices2D[v2];
+        if (!p1 || !p2) return;
+        
+        const edgeLength2D = Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+        if (edgeLength2D < minEdgeLength2D) return; // Skip very short edges
+        
+        const avgDepth = (depths[v1] + depths[v2]) / 2;
+        
+        let shouldInclude = false;
+        
+        if (faces.length === 1) {
+          // Silhouette edge - check if edge value exceeds threshold
+          if (faces[0].edgeValue > edgeThreshold) {
+            shouldInclude = true;
+          }
+        } else {
+          // Shared edge - check if normals differ significantly (boundary edge)
+          const f1 = faces[0];
+          const f2 = faces[1];
+          const dot = f1.normal.dot(f2.normal);
+          
+          // More aggressive: only include if normals differ significantly (angle > ~45 degrees)
+          // Changed from 0.866 (30°) to 0.707 (45°) to reduce edges
+          if (dot < 0.707) {
+            shouldInclude = true;
+          }
+        }
+        
+        if (shouldInclude) {
+          // Calculate color based on depth and shading settings
+          let color = baseColor;
+          if (numShadingColors > 1) {
+            color = getDepthColor(avgDepth, minDepth, maxDepth, numShadingColors, baseColor);
+          }
+          
+          if (!edgesByColor.has(color)) {
+            edgesByColor.set(color, []);
+          }
+          edgesByColor.get(color).push([v1, v2]);
+        }
+      });
+    }
 
     console.log(`Found edges in ${edgesByColor.size} color groups`);
 
     // Get optimization settings (very aggressive defaults for much smaller file size)
+    // For wireframe mode, use tighter tolerances to ensure edges connect properly
     const optimizeSettings = {
-      minEdgeLength: edgeSettings.minEdgeLength !== undefined ? edgeSettings.minEdgeLength : 2.0,      // Filter edges shorter than this (pixels)
-      simplifyEpsilon: edgeSettings.simplifyEpsilon !== undefined ? edgeSettings.simplifyEpsilon : 2.0,  // Path simplification tolerance (higher = more aggressive)
-      mergeTolerance: edgeSettings.mergeTolerance !== undefined ? edgeSettings.mergeTolerance : 2.0,    // Merge nearby points
+      minEdgeLength: edgeSettings.minEdgeLength !== undefined ? edgeSettings.minEdgeLength : (wireframeMode ? 0.5 : 2.0),      // Filter edges shorter than this (pixels)
+      simplifyEpsilon: edgeSettings.simplifyEpsilon !== undefined ? edgeSettings.simplifyEpsilon : (wireframeMode ? 0.5 : 2.0),  // Path simplification tolerance (higher = more aggressive)
+      mergeTolerance: edgeSettings.mergeTolerance !== undefined ? edgeSettings.mergeTolerance : (wireframeMode ? 0.5 : 2.0),    // Merge nearby points - tighter for wireframe
       removeColinear: edgeSettings.removeColinear !== false, // Remove colinear points
       coordinatePrecision: edgeSettings.coordinatePrecision !== undefined ? edgeSettings.coordinatePrecision : 0 // Decimal places (0 = integer precision, smallest file size)
     };
@@ -530,6 +671,12 @@ function exportSceneToSVGGeometry(scene, camera, renderer, options = {}) {
     });
 
     console.log(`Optimization: ${totalEdgesBefore} edges → ${totalPathsAfter} paths (${((1 - totalPathsAfter / totalEdgesBefore) * 100).toFixed(1)}% reduction)`);
+
+    // Clean up large intermediate arrays to free memory (after they're no longer needed)
+    // Note: Must be done AFTER connectGeometryEdges calls since it uses vertices2D
+    vertices2D.length = 0;
+    vertices3D.length = 0;
+    depths.length = 0;
 
     const strokeWidth = edgeSettings.width || 1;
     const precision = optimizeSettings.coordinatePrecision;
@@ -591,6 +738,11 @@ function exportSceneToSVGGeometry(scene, camera, renderer, options = {}) {
     }
     
     svg += '  </g>\n';
+    
+    // Clean up large intermediate data structures to free memory
+    edgesByColor.clear();
+    pathsByColor.clear();
+    edgeToFaces.clear();
     
   } catch (error) {
     console.error('Error in geometry export:', error);
@@ -780,6 +932,23 @@ function connectGeometryEdges(edges, vertices2D, options = {}) {
   const paths = [];
   const used = new Set();
   
+  // Helper to get neighboring grid cells for better connection matching
+  const getNeighborKeys = (x, y) => {
+    const baseKey = getKey(x, y);
+    const [baseX, baseY] = baseKey.split(',').map(Number);
+    return [
+      `${baseX},${baseY}`,     // center
+      `${baseX - 1},${baseY}`, // left
+      `${baseX + 1},${baseY}`, // right
+      `${baseX},${baseY - 1}`, // top
+      `${baseX},${baseY + 1}`, // bottom
+      `${baseX - 1},${baseY - 1}`, // top-left
+      `${baseX + 1},${baseY - 1}`, // top-right
+      `${baseX - 1},${baseY + 1}`, // bottom-left
+      `${baseX + 1},${baseY + 1}`, // bottom-right
+    ];
+  };
+  
   for (let i = 0; i < lines.length; i++) {
     if (used.has(i)) continue;
     
@@ -790,18 +959,68 @@ function connectGeometryEdges(edges, vertices2D, options = {}) {
     while (extended) {
       extended = false;
       const pathEnd = path[path.length - 1];
-      const key = getKey(pathEnd.x, pathEnd.y);
-      const candidates = spatialIndex.get(key) || [];
+      
+      // Check center and neighboring grid cells for better connection
+      const neighborKeys = getNeighborKeys(pathEnd.x, pathEnd.y);
+      const candidates = [];
+      neighborKeys.forEach(key => {
+        const cellCandidates = spatialIndex.get(key) || [];
+        candidates.push(...cellCandidates);
+      });
+      
+      // Find the best matching candidate (closest point within tolerance)
+      let bestCandidate = null;
+      let bestDistance = Infinity;
       
       for (const candidate of candidates) {
         if (used.has(candidate.idx)) continue;
         
-        if (distance(pathEnd, candidate.point) < mergeTolerance) {
-          path.push(candidate.other);
-          used.add(candidate.idx);
-          extended = true;
-          break;
+        const dist = distance(pathEnd, candidate.point);
+        if (dist < mergeTolerance && dist < bestDistance) {
+          bestDistance = dist;
+          bestCandidate = candidate;
         }
+      }
+      
+      if (bestCandidate) {
+        path.push(bestCandidate.other);
+        used.add(bestCandidate.idx);
+        extended = true;
+      }
+    }
+    
+    // Also extend backward from the start
+    extended = true;
+    while (extended) {
+      extended = false;
+      const pathStart = path[0];
+      
+      // Check center and neighboring grid cells for better connection
+      const neighborKeys = getNeighborKeys(pathStart.x, pathStart.y);
+      const candidates = [];
+      neighborKeys.forEach(key => {
+        const cellCandidates = spatialIndex.get(key) || [];
+        candidates.push(...cellCandidates);
+      });
+      
+      // Find the best matching candidate (closest point within tolerance)
+      let bestCandidate = null;
+      let bestDistance = Infinity;
+      
+      for (const candidate of candidates) {
+        if (used.has(candidate.idx)) continue;
+        
+        const dist = distance(pathStart, candidate.point);
+        if (dist < mergeTolerance && dist < bestDistance) {
+          bestDistance = dist;
+          bestCandidate = candidate;
+        }
+      }
+      
+      if (bestCandidate) {
+        path.unshift(bestCandidate.other);
+        used.add(bestCandidate.idx);
+        extended = true;
       }
     }
     
@@ -819,12 +1038,15 @@ function connectGeometryEdges(edges, vertices2D, options = {}) {
         }
       }
       
-      // Remove colinear points (more aggressive)
-      let simplified = removeColinear ? removeColinearPoints(mergedPath, 0.1) : mergedPath;
+      // Remove colinear points (less aggressive for wireframe to preserve structure)
+      const colinearTolerance = mergeTolerance < 1.0 ? 0.02 : 0.1; // Tighter tolerance for wireframe
+      let simplified = removeColinear ? removeColinearPoints(mergedPath, colinearTolerance) : mergedPath;
       
       // Apply Douglas-Peucker simplification if path is long enough
+      // Use less aggressive simplification for wireframe to preserve edge connections
       if (simplified.length > 3 && simplifyEpsilon > 0) {
-        simplified = simplifyPath(simplified, simplifyEpsilon);
+        const simplificationEpsilon = mergeTolerance < 1.0 ? Math.min(simplifyEpsilon, 0.5) : simplifyEpsilon;
+        simplified = simplifyPath(simplified, simplificationEpsilon);
       }
       
       // Filter out very short paths (aggressive filtering)
@@ -1605,6 +1827,10 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     // Get ImageData
     const imageData = tempCtx.getImageData(0, 0, processWidth, processHeight);
     
+    // Clean up canvas immediately after getting ImageData
+    tempCanvas.width = 0;
+    tempCanvas.height = 0;
+    
     // Apply dithering if requested (on the downsampled image)
     let processedImageData = imageData;
     if (applyDithering) {
@@ -1820,6 +2046,10 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     });
     
     console.log(`Generated SVG with ${pixels.length} dots in ${dotsByColor.size} color groups`);
+    
+    // Clean up large intermediate data structures
+    pixels.length = 0; // Clear pixel array
+    dotsByColor.clear(); // Clear color map
     
   } catch (error) {
     console.error('Error exporting image to SVG:', error);

@@ -113,7 +113,8 @@ export function applyFloydSteinbergDithering(imageData, levels = 2, threshold = 
   const height = imageData.height;
   
   // Create a copy to work with
-  const output = new ImageData(width, height);
+  // Use Uint8ClampedArray directly to avoid extra memory allocation
+  const output = new ImageData(new Uint8ClampedArray(data.length), width, height);
   const outputData = output.data;
   
   // Copy original data and apply contrast/brightness adjustments
@@ -239,7 +240,8 @@ export function applyOrderedDithering(imageData, levels = 2, threshold = 128, co
   const width = imageData.width;
   const height = imageData.height;
   
-  const output = new ImageData(width, height);
+  // Use Uint8ClampedArray directly to avoid extra memory allocation
+  const output = new ImageData(new Uint8ClampedArray(data.length), width, height);
   const outputData = output.data;
   
   // Copy original data and apply contrast/brightness adjustments

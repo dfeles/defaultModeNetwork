@@ -465,6 +465,7 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
                     className="export-select"
                   >
                     <option value="geometric">Geometric</option>
+                    <option value="wireframe">Wireframe</option>
                   </select>
                 </div>
               </div>

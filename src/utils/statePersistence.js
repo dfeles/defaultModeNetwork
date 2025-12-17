@@ -7,11 +7,46 @@ const STATE_KEY = 'defaultModeNetwork_state';
 const LOADED_IMAGES_KEY = 'defaultModeNetwork_loadedImages';
 
 /**
+ * Get estimated size of an object in bytes (rough estimate)
+ */
+function getObjectSize(obj) {
+  const str = JSON.stringify(obj);
+  return new Blob([str]).size;
+}
+
+/**
+ * Clean up old localStorage data if it's getting too large
+ */
+function cleanupOldState() {
+  try {
+    const stateKey = 'defaultModeNetwork_state';
+    const imagesKey = 'defaultModeNetwork_loadedImages';
+    
+    const state = localStorage.getItem(stateKey);
+    const images = localStorage.getItem(imagesKey);
+    
+    const totalSize = (state ? state.length : 0) + (images ? images.length : 0);
+    
+    // If total size exceeds 1MB, clear old data
+    if (totalSize > 1024 * 1024) {
+      console.warn('localStorage size exceeds 1MB, clearing old state');
+      localStorage.removeItem(stateKey);
+      localStorage.removeItem(imagesKey);
+    }
+  } catch (error) {
+    console.error('Error cleaning up old state:', error);
+  }
+}
+
+/**
  * Save application state to localStorage
  * Note: File objects cannot be serialized, so we save metadata instead
  */
 export function saveState(state) {
   try {
+    // Clean up old state if needed
+    cleanupOldState();
+    
     const serializableState = {
       // File references (save metadata only)
       selectedDefaultFile: state.selectedDefaultFile,
@@ -96,8 +131,12 @@ export function clearState() {
  */
 export function saveLoadedImages(loadedImages) {
   try {
+    // Limit the number of saved images to prevent localStorage bloat
+    const MAX_SAVED_IMAGES = 50;
+    const imagesToSave = loadedImages.slice(0, MAX_SAVED_IMAGES);
+    
     // Save only metadata that can be serialized
-    const serializableImages = loadedImages.map(img => ({
+    const serializableImages = imagesToSave.map(img => ({
       name: img.name,
       type: img.type,
       id: img.id,
@@ -105,10 +144,35 @@ export function saveLoadedImages(loadedImages) {
       // They will need to be regenerated on load
     }));
     
-    localStorage.setItem(LOADED_IMAGES_KEY, JSON.stringify(serializableImages));
+    const serialized = JSON.stringify(serializableImages);
+    
+    // Check size before saving
+    if (serialized.length > 500 * 1024) { // 500KB limit
+      console.warn('Loaded images data too large, truncating');
+      const truncated = serializableImages.slice(0, Math.floor(serializableImages.length / 2));
+      localStorage.setItem(LOADED_IMAGES_KEY, JSON.stringify(truncated));
+    } else {
+      localStorage.setItem(LOADED_IMAGES_KEY, serialized);
+    }
+    
     return true;
   } catch (error) {
     console.error('Error saving loaded images:', error);
+    // If quota exceeded, try to clear and save fewer images
+    if (error.name === 'QuotaExceededError') {
+      try {
+        const truncated = loadedImages.slice(0, 10).map(img => ({
+          name: img.name,
+          type: img.type,
+          id: img.id,
+        }));
+        localStorage.setItem(LOADED_IMAGES_KEY, JSON.stringify(truncated));
+        return true;
+      } catch (e) {
+        console.error('Error saving truncated images:', e);
+        return false;
+      }
+    }
     return false;
   }
 }
