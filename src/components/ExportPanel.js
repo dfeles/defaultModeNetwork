@@ -1,6 +1,72 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './ExportPanel.css';
 
+// Simple switch component (shadcn-style)
+function Switch({ checked, onCheckedChange, id }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-labelledby={id}
+      onClick={() => onCheckedChange(!checked)}
+      className={`switch ${checked ? 'switch-checked' : ''}`}
+    >
+      <span className="switch-thumb" />
+    </button>
+  );
+}
+
+// Figma-style size input parser
+function parseFigmaSize(input, baseWidth, baseHeight) {
+  if (!input || typeof input !== 'string') return null;
+  
+  const trimmed = input.trim().toLowerCase();
+  
+  // Handle multiplier (2x, 3x, etc.)
+  const multiplierMatch = trimmed.match(/^(\d+(?:\.\d+)?)x$/);
+  if (multiplierMatch) {
+    const multiplier = parseFloat(multiplierMatch[1]);
+    return {
+      width: Math.round(baseWidth * multiplier),
+      height: Math.round(baseHeight * multiplier)
+    };
+  }
+  
+  // Handle width constraint (1280w, 1920w, etc.)
+  const widthMatch = trimmed.match(/^(\d+)w$/);
+  if (widthMatch) {
+    const targetWidth = parseInt(widthMatch[1]);
+    const aspectRatio = baseWidth / baseHeight;
+    return {
+      width: targetWidth,
+      height: Math.round(targetWidth / aspectRatio)
+    };
+  }
+  
+  // Handle height constraint (720h, 1080h, etc.)
+  const heightMatch = trimmed.match(/^(\d+)h$/);
+  if (heightMatch) {
+    const targetHeight = parseInt(heightMatch[1]);
+    const aspectRatio = baseWidth / baseHeight;
+    return {
+      width: Math.round(targetHeight * aspectRatio),
+      height: targetHeight
+    };
+  }
+  
+  // Handle explicit dimensions (1280x720, 1920x1080, etc.)
+  const dimensionMatch = trimmed.match(/^(\d+)x(\d+)$/);
+  if (dimensionMatch) {
+    return {
+      width: parseInt(dimensionMatch[1]),
+      height: parseInt(dimensionMatch[2])
+    };
+  }
+  
+  return null;
+}
+
 // Draggable number input component (Figma-style)
 function DraggableNumberInput({ value, onChange, min, max, step = 1, unit = '', label, small }) {
   const [isDragging, setIsDragging] = useState(false);
@@ -197,9 +263,10 @@ function DraggableNumberInput({ value, onChange, min, max, step = 1, unit = '', 
   );
 }
 
-function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange, ditheringResolution, onDitheringResolutionChange, ditheringThreshold, onDitheringThresholdChange, ditheringContrast, onDitheringContrastChange, ditheringBrightness, onDitheringBrightnessChange, ditheringColorCount, onDitheringColorCountChange, ditheringColorPalette, onDitheringColorPaletteChange, ditheringGradient, onDitheringGradientChange, ditheringMethod, onDitheringMethodChange, exportMode, onExportModeChange, stlExportMode, onStlExportModeChange, pixelFilter, onPixelFilterChange, renderBackground, onRenderBackgroundChange, strokeColor, onStrokeColorChange, strokeWidth, onStrokeWidthChange }) {
+function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange, ditheringResolution, onDitheringResolutionChange, ditheringThreshold, onDitheringThresholdChange, ditheringContrast, onDitheringContrastChange, ditheringBrightness, onDitheringBrightnessChange, ditheringColorCount, onDitheringColorCountChange, ditheringColorPalette, onDitheringColorPaletteChange, ditheringGradient, onDitheringGradientChange, ditheringMethod, onDitheringMethodChange, exportMode, onExportModeChange, stlExportMode, onStlExportModeChange, pixelFilter, onPixelFilterChange, renderBackground, onRenderBackgroundChange, strokeColor, onStrokeColorChange, strokeWidth, onStrokeWidthChange, exportFormat, onExportFormatChange, pngSizeInput, onPngSizeInputChange, imageData }) {
   const hasContent = hasMesh || hasImage;
   const [isExportExpanded, setIsExportExpanded] = useState(false);
+  const [pngSizeInputValue, setPngSizeInputValue] = useState(pngSizeInput || '');
 
   return (
     <div className="export-panel">
@@ -476,80 +543,138 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
               <>
                 <div className="control-group">
                   <div className="control-row">
-                    <div className="control-label">Export Mode</div>
-                    <select
-                      value={exportMode}
-                      onChange={(e) => onExportModeChange(e.target.value)}
-                      className="export-select"
-                    >
-                      <option value="optimized">Optimized (VIP)</option>
-                      <option value="simple">Simple</option>
-                    </select>
+                    <div className="control-label">Format</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                      <span style={{ fontSize: '11px', color: exportFormat === 'png' ? '#fff' : '#666' }}>PNG</span>
+                      <Switch
+                        checked={exportFormat === 'svg'}
+                        onCheckedChange={(checked) => onExportFormatChange(checked ? 'svg' : 'png')}
+                        id="export-format-switch"
+                      />
+                      <span style={{ fontSize: '11px', color: exportFormat === 'svg' ? '#fff' : '#666' }}>SVG</span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="control-group">
-                  <div className="control-row">
-                    <div className="control-label">Pixel Filter</div>
-                    <select
-                      value={pixelFilter}
-                      onChange={(e) => onPixelFilterChange(e.target.value)}
-                      className="export-select"
-                    >
-                      <option value="both">Both</option>
-                      <option value="black">Black Only</option>
-                      <option value="white">White Only</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="control-group">
-                  <div className="control-row">
-                    <div className="control-label">Render Background</div>
-                    <input
-                      type="checkbox"
-                      checked={renderBackground}
-                      onChange={(e) => onRenderBackgroundChange(e.target.checked)}
-                    />
-                  </div>
-                </div>
-
-                <div className="control-group">
-                  <div className="control-row">
-                    <div className="control-label">Stroke Color</div>
-                    <input
-                      type="color"
-                      value={strokeColor || '#000000'}
-                      onChange={(e) => onStrokeColorChange(e.target.value)}
-                    />
-                    <button
-                      style={{
-                        padding: '4px 8px',
-                        background: strokeColor ? '#1a1a1a' : '#2a2a2a',
-                        border: '1px solid #2a2a2a',
-                        borderRadius: '4px',
-                        color: '#fff',
-                        cursor: 'pointer',
-                        fontSize: '11px'
-                      }}
-                      onClick={() => onStrokeColorChange(strokeColor ? null : '#000000')}
-                    >
-                      {strokeColor ? 'Disable' : 'Enable'}
-                    </button>
-                  </div>
-                </div>
-
-                {strokeColor && (
+                {/* PNG Size Input - Only show when PNG is selected */}
+                {exportFormat === 'png' && imageData && (
                   <div className="control-group">
-                    <DraggableNumberInput
-                      value={strokeWidth}
-                      onChange={(val) => onStrokeWidthChange(val)}
-                      min={0.1}
-                      max={5}
-                      step={0.1}
-                      label="Stroke Width"
-                    />
+                    <div className="draggable-input-wrapper">
+                      <div className="draggable-input-row">
+                        <div className="draggable-input-label">Size</div>
+                        <div className="draggable-input-container">
+                          <input
+                            type="text"
+                            value={pngSizeInputValue}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setPngSizeInputValue(value);
+                              onPngSizeInputChange(value);
+                            }}
+                            onFocus={(e) => e.target.select()}
+                            placeholder="1x, 2x, 4x, 1024w"
+                            className="draggable-input"
+                            style={{ fontFamily: 'monospace', cursor: 'text' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <small style={{ display: 'block', marginTop: '6px', color: '#666', fontSize: '11px' }}>
+                      {(() => {
+                        const parsed = parseFigmaSize(pngSizeInputValue, imageData.width, imageData.height);
+                        if (parsed) {
+                          return `${parsed.width} × ${parsed.height}px`;
+                        }
+                        return '1x, 2x, 4x, 1024w';
+                      })()}
+                    </small>
                   </div>
+                )}
+
+                {/* SVG Export Mode - Only show when SVG is selected */}
+                {exportFormat === 'svg' && (
+                  <div className="control-group">
+                    <div className="control-row">
+                      <div className="control-label">Export Mode</div>
+                      <select
+                        value={exportMode}
+                        onChange={(e) => onExportModeChange(e.target.value)}
+                        className="export-select"
+                      >
+                        <option value="optimized">Optimized (VIP)</option>
+                        <option value="simple">Simple</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {/* SVG-specific settings - Only show when SVG is selected */}
+                {exportFormat === 'svg' && (
+                  <>
+                    <div className="control-group">
+                      <div className="control-row">
+                        <div className="control-label">Pixel Filter</div>
+                        <select
+                          value={pixelFilter}
+                          onChange={(e) => onPixelFilterChange(e.target.value)}
+                          className="export-select"
+                        >
+                          <option value="both">Both</option>
+                          <option value="black">Black Only</option>
+                          <option value="white">White Only</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="control-group">
+                      <div className="control-row">
+                        <div className="control-label">Render Background</div>
+                        <input
+                          type="checkbox"
+                          checked={renderBackground}
+                          onChange={(e) => onRenderBackgroundChange(e.target.checked)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="control-group">
+                      <div className="control-row">
+                        <div className="control-label">Stroke Color</div>
+                        <input
+                          type="color"
+                          value={strokeColor || '#000000'}
+                          onChange={(e) => onStrokeColorChange(e.target.value)}
+                        />
+                        <button
+                          style={{
+                            padding: '4px 8px',
+                            background: strokeColor ? '#1a1a1a' : '#2a2a2a',
+                            border: '1px solid #2a2a2a',
+                            borderRadius: '4px',
+                            color: '#fff',
+                            cursor: 'pointer',
+                            fontSize: '11px'
+                          }}
+                          onClick={() => onStrokeColorChange(strokeColor ? null : '#000000')}
+                        >
+                          {strokeColor ? 'Disable' : 'Enable'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {strokeColor && (
+                      <div className="control-group">
+                        <DraggableNumberInput
+                          value={strokeWidth}
+                          onChange={(val) => onStrokeWidthChange(val)}
+                          min={0.1}
+                          max={5}
+                          step={0.1}
+                          label="Stroke Width"
+                        />
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -559,15 +684,10 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
               onClick={onGenerateSVG}
               disabled={!hasContent}
             >
-              Generate SVG
+              {exportFormat === 'png' ? 'Generate PNG' : 'Generate SVG'}
             </button>
             {!hasContent && (
               <p className="hint">Load a file first</p>
-            )}
-            {hasContent && inputMode === 'image' && (
-              <p className="hint">
-                Preview updates automatically. Click "Generate SVG" to create vector format.
-              </p>
             )}
               </div>
             </div>
@@ -575,50 +695,82 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, hasMesh, hasImage
         </div>
       )}
       
-      {generatedSVG && (
+      {isExportExpanded && (generatedSVG || generatedPNG || (exportFormat === 'png' && imageData && pngSizeInput)) && (
         <div className="panel-section">
           <div className="svg-preview-container">
             <h3>Preview</h3>
-            {(() => {
-              // Calculate metadata
-              const fileSize = new Blob([generatedSVG]).size;
-              const fileSizeKB = (fileSize / 1024).toFixed(1);
-              const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(2);
-              const sizeDisplay = fileSize > 1024 * 1024 ? `${fileSizeMB} MB` : `${fileSizeKB} KB`;
-              
-              // Count paths/shapes (including images, paths, circles, rects, etc.)
-              const parser = new DOMParser();
-              const svgDoc = parser.parseFromString(generatedSVG, 'image/svg+xml');
-              const paths = svgDoc.querySelectorAll('path');
-              const images = svgDoc.querySelectorAll('image');
-              const circles = svgDoc.querySelectorAll('circle');
-              const rects = svgDoc.querySelectorAll('rect');
-              const polygons = svgDoc.querySelectorAll('polygon');
-              const polylines = svgDoc.querySelectorAll('polyline');
-              const ellipses = svgDoc.querySelectorAll('ellipse');
-              const shapeCount = paths.length + images.length + circles.length + rects.length + 
-                                polygons.length + polylines.length + ellipses.length;
-              
-              return (
-                <>
-                  <div 
-                    className="svg-preview"
-                    dangerouslySetInnerHTML={{ __html: generatedSVG }}
+            {exportFormat === 'png' && generatedPNG ? (
+              <div>
+                <div className="svg-preview" style={{ textAlign: 'center', padding: '8px' }}>
+                  <img 
+                    src={generatedPNG} 
+                    alt="PNG Preview" 
+                    style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px' }}
                   />
-                  <div className="svg-metadata">
-                    <span>{sizeDisplay}</span>
-                    <span>•</span>
-                    <span>{shapeCount} {shapeCount === 1 ? 'shape' : 'shapes'}</span>
+                </div>
+                <div className="svg-metadata">
+                  <span>PNG Export</span>
+                </div>
+              </div>
+            ) : exportFormat === 'png' && imageData ? (
+              <div>
+                <div className="svg-preview" style={{ textAlign: 'center', padding: '20px' }}>
+                  <div style={{ color: '#666', fontSize: '12px' }}>
+                    {(() => {
+                      const parsed = parseFigmaSize(pngSizeInput, imageData.width, imageData.height);
+                      if (parsed) {
+                        return `Will export at ${parsed.width} × ${parsed.height}px`;
+                      }
+                      return 'Enter size (e.g., 2x, 1280w)';
+                    })()}
                   </div>
-                </>
-              );
-            })()}
+                </div>
+                <div className="svg-metadata">
+                  <span>PNG Export</span>
+                </div>
+              </div>
+            ) : generatedSVG ? (
+              (() => {
+                // Calculate metadata
+                const fileSize = new Blob([generatedSVG]).size;
+                const fileSizeKB = (fileSize / 1024).toFixed(1);
+                const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+                const sizeDisplay = fileSize > 1024 * 1024 ? `${fileSizeMB} MB` : `${fileSizeKB} KB`;
+                
+                // Count paths/shapes (including images, paths, circles, rects, etc.)
+                const parser = new DOMParser();
+                const svgDoc = parser.parseFromString(generatedSVG, 'image/svg+xml');
+                const paths = svgDoc.querySelectorAll('path');
+                const images = svgDoc.querySelectorAll('image');
+                const circles = svgDoc.querySelectorAll('circle');
+                const rects = svgDoc.querySelectorAll('rect');
+                const polygons = svgDoc.querySelectorAll('polygon');
+                const polylines = svgDoc.querySelectorAll('polyline');
+                const ellipses = svgDoc.querySelectorAll('ellipse');
+                const shapeCount = paths.length + images.length + circles.length + rects.length + 
+                                  polygons.length + polylines.length + ellipses.length;
+                
+                return (
+                  <>
+                    <div 
+                      className="svg-preview"
+                      dangerouslySetInnerHTML={{ __html: generatedSVG }}
+                    />
+                    <div className="svg-metadata">
+                      <span>{sizeDisplay}</span>
+                      <span>•</span>
+                      <span>{shapeCount} {shapeCount === 1 ? 'shape' : 'shapes'}</span>
+                    </div>
+                  </>
+                );
+              })()
+            ) : null}
           </div>
           <button
             className="save-button"
             onClick={onSaveSVG}
           >
-            Download
+            Download {exportFormat === 'png' ? 'PNG' : 'SVG'}
           </button>
         </div>
       )}

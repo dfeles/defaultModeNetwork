@@ -197,6 +197,9 @@ function App() {
   const [strokeWidth, setStrokeWidth] = useState(0.5); // Stroke width in SVG units
   const [ditheringGradient, setDitheringGradient] = useState(50); // Gradient control (0-100, 50 = linear)
   const [ditheringMethod, setDitheringMethod] = useState('floyd-steinberg'); // 'floyd-steinberg' or 'ordered'
+  const [exportFormat, setExportFormat] = useState('png'); // 'png' or 'svg' - default PNG
+  const [pngSizeInput, setPngSizeInput] = useState(''); // Figma-style size input
+  const [generatedPNG, setGeneratedPNG] = useState(null); // Generated PNG data URL
   const [isDragging, setIsDragging] = useState(false);
   const [initialScale, setInitialScale] = useState(0.5); // Start with a smaller default scale
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
@@ -360,6 +363,10 @@ function App() {
   };
 
   const handleImageLoaded = (data) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:365',message:'handleImageLoaded entry',data:{hasImagePreviewUrl:!!imagePreviewUrl,hasProcessedPreviewUrl:!!processedPreviewUrl,imagePreviewUrlSize:imagePreviewUrl?.length||0,processedPreviewUrlSize:processedPreviewUrl?.length||0,hasImageData:!!imageData,hasTexture:!!imageData?.texture},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    
     // Clean up previous preview URLs to free memory
     if (imagePreviewUrl && imagePreviewUrl.startsWith('data:')) {
       // Data URLs can't be revoked, but we can clear the reference
@@ -402,11 +409,17 @@ function App() {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(data.texture.image, 0, 0);
       const previewUrl = canvas.toDataURL('image/jpeg', 0.85); // Use JPEG with compression to reduce memory
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:407',message:'Canvas created for preview',data:{canvasWidth:canvas.width,canvasHeight:canvas.height,previewUrlSize:previewUrl.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       setImagePreviewUrl(previewUrl);
       
       // Clean up canvas after use
       canvas.width = 0;
       canvas.height = 0;
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:413',message:'Canvas cleaned up',data:{canvasWidth:canvas.width,canvasHeight:canvas.height},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
     }
   };
 
@@ -497,29 +510,48 @@ function App() {
     let cancelled = false;
     let processCanvas = null;
     let displayCanvas = null;
+    let idleCallbackId = null;
+    let timeoutId = null;
     
     if (inputMode === 'image' && imageData && imageData.texture && imageData.texture.image) {
+      // Capture current imageData and settings in closure to avoid stale closures
+      const currentImageData = imageData;
+      const currentApplyDithering = applyDithering;
+      const currentDitheringResolution = ditheringResolution;
+      const currentDitheringThreshold = ditheringThreshold;
+      const currentDitheringContrast = ditheringContrast;
+      const currentDitheringBrightness = ditheringBrightness;
+      const currentDitheringMethod = ditheringMethod;
+      const currentDitheringColorCount = ditheringColorCount;
+      const currentDitheringColorPalette = ditheringColorPalette;
+      const currentDitheringGradient = ditheringGradient;
+      
       const generatePreview = () => {
         if (cancelled) return;
         
+        // Double-check that the imageData is still valid (hasn't been replaced)
+        if (!currentImageData || !currentImageData.texture || !currentImageData.texture.image) {
+          return;
+        }
+        
         try {
           // For dithering, downsample first, then apply dithering, then scale back up for display
-          let processWidth = imageData.width;
-          let processHeight = imageData.height;
+          let processWidth = currentImageData.width;
+          let processHeight = currentImageData.height;
           let scaleFactor = 1;
           
-          if (applyDithering) {
+          if (currentApplyDithering) {
             // Downsample to dithering resolution before processing
-            const targetDimension = ditheringResolution;
-            if (imageData.width > targetDimension || imageData.height > targetDimension) {
-              if (imageData.width > imageData.height) {
-                scaleFactor = targetDimension / imageData.width;
+            const targetDimension = currentDitheringResolution;
+            if (currentImageData.width > targetDimension || currentImageData.height > targetDimension) {
+              if (currentImageData.width > currentImageData.height) {
+                scaleFactor = targetDimension / currentImageData.width;
                 processWidth = targetDimension;
-                processHeight = Math.round(imageData.height * scaleFactor);
+                processHeight = Math.round(currentImageData.height * scaleFactor);
               } else {
-                scaleFactor = targetDimension / imageData.height;
+                scaleFactor = targetDimension / currentImageData.height;
                 processHeight = targetDimension;
-                processWidth = Math.round(imageData.width * scaleFactor);
+                processWidth = Math.round(currentImageData.width * scaleFactor);
               }
             }
           }
@@ -528,25 +560,28 @@ function App() {
           processCanvas = document.createElement('canvas');
           processCanvas.width = processWidth;
           processCanvas.height = processHeight;
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:550',message:'Process canvas created',data:{processWidth,processHeight},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
           const processCtx = processCanvas.getContext('2d');
           
           // Draw the image to the processing canvas (downsampled if dithering)
-          processCtx.drawImage(imageData.texture.image, 0, 0, processWidth, processHeight);
+          processCtx.drawImage(currentImageData.texture.image, 0, 0, processWidth, processHeight);
           
           // Apply dithering if requested (on downsampled image)
           let imageDataObj = null;
           let ditheredData = null;
-          if (applyDithering) {
+          if (currentApplyDithering) {
             imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
-            const ditherFunction = ditheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
+            const ditherFunction = currentDitheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
             ditheredData = ditherFunction(
               imageDataObj, 
-              ditheringColorCount, 
-              ditheringThreshold, 
-              ditheringContrast, 
-              ditheringBrightness,
-              ditheringColorCount > 2 ? ditheringColorPalette : null,
-              ditheringGradient
+              currentDitheringColorCount, 
+              currentDitheringThreshold, 
+              currentDitheringContrast, 
+              currentDitheringBrightness,
+              currentDitheringColorCount > 2 ? currentDitheringColorPalette : null,
+              currentDitheringGradient
             );
             processCtx.putImageData(ditheredData, 0, 0);
           }
@@ -562,12 +597,15 @@ function App() {
           
           // Create display canvas (original size for preview)
           displayCanvas = document.createElement('canvas');
-          displayCanvas.width = imageData.width;
-          displayCanvas.height = imageData.height;
+          displayCanvas.width = currentImageData.width;
+          displayCanvas.height = currentImageData.height;
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:586',message:'Display canvas created',data:{displayWidth:displayCanvas.width,displayHeight:displayCanvas.height},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
           const displayCtx = displayCanvas.getContext('2d');
           
           // Scale the processed image back up to original size for display
-          displayCtx.drawImage(processCanvas, 0, 0, imageData.width, imageData.height);
+          displayCtx.drawImage(processCanvas, 0, 0, currentImageData.width, currentImageData.height);
           
           if (cancelled) {
             // Clean up if cancelled
@@ -613,9 +651,9 @@ function App() {
       
       // Generate preview immediately (fast, non-blocking)
       if (window.requestIdleCallback) {
-        requestIdleCallback(generatePreview, { timeout: 500 });
+        idleCallbackId = requestIdleCallback(generatePreview, { timeout: 500 });
       } else {
-        setTimeout(generatePreview, 0);
+        timeoutId = setTimeout(generatePreview, 0);
       }
     } else {
       // Clear processed preview if no image
@@ -624,6 +662,14 @@ function App() {
     
     return () => {
       cancelled = true;
+      
+      // Cancel scheduled callbacks
+      if (idleCallbackId !== null && window.cancelIdleCallback) {
+        cancelIdleCallback(idleCallbackId);
+      }
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
       // Clean up canvases if still in use
       if (processCanvas) {
         processCanvas.width = 0;
@@ -965,58 +1011,197 @@ function App() {
     };
   }, []);
 
+  // Parse Figma-style size input
+  const parseFigmaSize = (input, baseWidth, baseHeight) => {
+    if (!input || typeof input !== 'string') return null;
+    
+    const trimmed = input.trim().toLowerCase();
+    
+    // Handle multiplier (2x, 3x, etc.)
+    const multiplierMatch = trimmed.match(/^(\d+(?:\.\d+)?)x$/);
+    if (multiplierMatch) {
+      const multiplier = parseFloat(multiplierMatch[1]);
+      return {
+        width: Math.round(baseWidth * multiplier),
+        height: Math.round(baseHeight * multiplier)
+      };
+    }
+    
+    // Handle width constraint (1280w, 1920w, etc.)
+    const widthMatch = trimmed.match(/^(\d+)w$/);
+    if (widthMatch) {
+      const targetWidth = parseInt(widthMatch[1]);
+      const aspectRatio = baseWidth / baseHeight;
+      return {
+        width: targetWidth,
+        height: Math.round(targetWidth / aspectRatio)
+      };
+    }
+    
+    // Handle height constraint (720h, 1080h, etc.)
+    const heightMatch = trimmed.match(/^(\d+)h$/);
+    if (heightMatch) {
+      const targetHeight = parseInt(heightMatch[1]);
+      const aspectRatio = baseWidth / baseHeight;
+      return {
+        width: Math.round(targetHeight * aspectRatio),
+        height: targetHeight
+      };
+    }
+    
+    // Handle explicit dimensions (1280x720, 1920x1080, etc.)
+    const dimensionMatch = trimmed.match(/^(\d+)x(\d+)$/);
+    if (dimensionMatch) {
+      return {
+        width: parseInt(dimensionMatch[1]),
+        height: parseInt(dimensionMatch[2])
+      };
+    }
+    
+    return null;
+  };
+
   const handleGenerateSVG = () => {
     if (inputMode === 'image' && imageData) {
-      // Generate actual vector SVG from image (async to prevent UI freeze)
-      setIsLoading(true);
-      
-      // Use requestIdleCallback or setTimeout with chunked processing
-      const generateSVGAsync = () => {
-        try {
-          const svgWidth = imageData.width;
-          const svgHeight = imageData.height;
-          
-          console.log('Starting SVG generation...');
-          const startTime = performance.now();
-          
-          const svgString = exportImageToSVG(imageData.texture, null, {
-            width: svgWidth,
-            height: svgHeight,
-            imageWidth: imageData.width,
-            imageHeight: imageData.height,
-            applyDithering,
-            ditheringResolution: applyDithering ? ditheringResolution : undefined,
-            ditheringThreshold: applyDithering ? ditheringThreshold : undefined,
-            ditheringContrast: applyDithering ? ditheringContrast : undefined,
-            ditheringBrightness: applyDithering ? ditheringBrightness : undefined,
-            ditheringColorCount: applyDithering ? ditheringColorCount : undefined,
-            ditheringColorPalette: applyDithering && ditheringColorCount > 2 ? ditheringColorPalette : undefined,
-            ditheringGradient: applyDithering && ditheringColorCount > 2 ? ditheringGradient : undefined,
-            ditheringMethod: applyDithering ? ditheringMethod : undefined,
-            exportMode,
-            pixelFilter,
-            renderBackground,
-            strokeColor: strokeColor || undefined,
-            strokeWidth: strokeColor ? strokeWidth : undefined
-          });
-          
-          const endTime = performance.now();
-          console.log(`SVG generation took ${((endTime - startTime) / 1000).toFixed(2)} seconds`);
-          
-          setGeneratedSVG(svgString);
-        } catch (error) {
-          console.error('Error generating SVG:', error);
-          alert('Error generating SVG: ' + error.message);
-        } finally {
-          setIsLoading(false);
+      if (exportFormat === 'png') {
+        // Generate PNG
+        setIsLoading(true);
+        
+        const generatePNGAsync = () => {
+          try {
+            // Parse size input
+            const parsedSize = parseFigmaSize(pngSizeInput, imageData.width, imageData.height);
+            const targetWidth = parsedSize ? parsedSize.width : imageData.width;
+            const targetHeight = parsedSize ? parsedSize.height : imageData.height;
+            
+            // Create canvas for processing
+            const processCanvas = document.createElement('canvas');
+            let processWidth = imageData.width;
+            let processHeight = imageData.height;
+            let scaleFactor = 1;
+            
+            if (applyDithering) {
+              // Downsample to dithering resolution before processing
+              const targetDimension = ditheringResolution;
+              if (imageData.width > targetDimension || imageData.height > targetDimension) {
+                if (imageData.width > imageData.height) {
+                  scaleFactor = targetDimension / imageData.width;
+                  processWidth = targetDimension;
+                  processHeight = Math.round(imageData.height * scaleFactor);
+                } else {
+                  scaleFactor = targetDimension / imageData.height;
+                  processHeight = targetDimension;
+                  processWidth = Math.round(imageData.width * scaleFactor);
+                }
+              }
+            }
+            
+            processCanvas.width = processWidth;
+            processCanvas.height = processHeight;
+            const processCtx = processCanvas.getContext('2d');
+            
+            // Draw the image to the processing canvas
+            processCtx.drawImage(imageData.texture.image, 0, 0, processWidth, processHeight);
+            
+            // Apply dithering if requested
+            if (applyDithering) {
+              const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
+              const ditherFunction = ditheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
+              const ditheredData = ditherFunction(
+                imageDataObj,
+                ditheringColorCount,
+                ditheringThreshold,
+                ditheringContrast,
+                ditheringBrightness,
+                ditheringColorCount > 2 ? ditheringColorPalette : null,
+                ditheringGradient
+              );
+              processCtx.putImageData(ditheredData, 0, 0);
+            }
+            
+            // Create final canvas at target size
+            const finalCanvas = document.createElement('canvas');
+            finalCanvas.width = targetWidth;
+            finalCanvas.height = targetHeight;
+            const finalCtx = finalCanvas.getContext('2d');
+            
+            // Scale the processed image to target size
+            finalCtx.drawImage(processCanvas, 0, 0, targetWidth, targetHeight);
+            
+            // Convert to PNG data URL
+            const pngDataUrl = finalCanvas.toDataURL('image/png');
+            setGeneratedPNG(pngDataUrl);
+            setGeneratedSVG(null); // Clear SVG if it exists
+            
+            // Clean up
+            processCanvas.width = 0;
+            processCanvas.height = 0;
+            finalCanvas.width = 0;
+            finalCanvas.height = 0;
+          } catch (error) {
+            console.error('Error generating PNG:', error);
+            alert('Error generating PNG: ' + error.message);
+          } finally {
+            setIsLoading(false);
+          }
+        };
+        
+        if (window.requestIdleCallback) {
+          requestIdleCallback(generatePNGAsync, { timeout: 2000 });
+        } else {
+          setTimeout(generatePNGAsync, 100);
         }
-      };
-      
-      // Use requestIdleCallback if available for better performance
-      if (window.requestIdleCallback) {
-        requestIdleCallback(generateSVGAsync, { timeout: 2000 });
       } else {
-        setTimeout(generateSVGAsync, 100);
+        // Generate SVG
+        setIsLoading(true);
+        
+        const generateSVGAsync = () => {
+          try {
+            const svgWidth = imageData.width;
+            const svgHeight = imageData.height;
+            
+            console.log('Starting SVG generation...');
+            const startTime = performance.now();
+            
+            const svgString = exportImageToSVG(imageData.texture, null, {
+              width: svgWidth,
+              height: svgHeight,
+              imageWidth: imageData.width,
+              imageHeight: imageData.height,
+              applyDithering,
+              ditheringResolution: applyDithering ? ditheringResolution : undefined,
+              ditheringThreshold: applyDithering ? ditheringThreshold : undefined,
+              ditheringContrast: applyDithering ? ditheringContrast : undefined,
+              ditheringBrightness: applyDithering ? ditheringBrightness : undefined,
+              ditheringColorCount: applyDithering ? ditheringColorCount : undefined,
+              ditheringColorPalette: applyDithering && ditheringColorCount > 2 ? ditheringColorPalette : undefined,
+              ditheringGradient: applyDithering && ditheringColorCount > 2 ? ditheringGradient : undefined,
+              ditheringMethod: applyDithering ? ditheringMethod : undefined,
+              exportMode,
+              pixelFilter,
+              renderBackground,
+              strokeColor: strokeColor || undefined,
+              strokeWidth: strokeColor ? strokeWidth : undefined
+            });
+            
+            const endTime = performance.now();
+            console.log(`SVG generation took ${((endTime - startTime) / 1000).toFixed(2)} seconds`);
+            
+            setGeneratedSVG(svgString);
+            setGeneratedPNG(null); // Clear PNG if it exists
+          } catch (error) {
+            console.error('Error generating SVG:', error);
+            alert('Error generating SVG: ' + error.message);
+          } finally {
+            setIsLoading(false);
+          }
+        };
+        
+        if (window.requestIdleCallback) {
+          requestIdleCallback(generateSVGAsync, { timeout: 2000 });
+        } else {
+          setTimeout(generateSVGAsync, 100);
+        }
       }
     } else if (inputMode === 'stl' && meshData) {
       // Generate SVG from STL
@@ -1028,8 +1213,16 @@ function App() {
   };
 
   const handleSaveSVG = () => {
-    if (!generatedSVG) return;
-    downloadSVG(generatedSVG, 'stl_export.svg');
+    if (exportFormat === 'png' && generatedPNG) {
+      // Download PNG
+      const link = document.createElement('a');
+      link.download = 'export.png';
+      link.href = generatedPNG;
+      link.click();
+    } else if (generatedSVG) {
+      // Download SVG
+      downloadSVG(generatedSVG, 'export.svg');
+    }
   };
 
   return (
@@ -1091,9 +1284,15 @@ function App() {
               onGenerateSVG={handleGenerateSVG}
               onSaveSVG={handleSaveSVG}
               generatedSVG={generatedSVG}
+              generatedPNG={generatedPNG}
               hasMesh={!!meshData}
               hasImage={!!imageData}
               inputMode={inputMode}
+              exportFormat={exportFormat}
+              onExportFormatChange={setExportFormat}
+              pngSizeInput={pngSizeInput}
+              onPngSizeInputChange={setPngSizeInput}
+              imageData={imageData}
               edgeSettings={edgeSettings}
               onEdgeSettingsChange={(newSettings) => {
                 setEdgeSettings(newSettings);
@@ -1334,9 +1533,15 @@ function App() {
         onGenerateSVG={handleGenerateSVG}
         onSaveSVG={handleSaveSVG}
         generatedSVG={generatedSVG}
+        generatedPNG={generatedPNG}
         hasMesh={!!meshData}
         hasImage={!!imageData}
         inputMode={inputMode}
+        exportFormat={exportFormat}
+        onExportFormatChange={setExportFormat}
+        pngSizeInput={pngSizeInput}
+        onPngSizeInputChange={setPngSizeInput}
+        imageData={imageData}
         edgeSettings={edgeSettings}
         onEdgeSettingsChange={(newSettings) => {
           setEdgeSettings(newSettings);

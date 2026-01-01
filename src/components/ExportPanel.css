@@ -568,6 +568,11 @@
   font-family: inherit;
 }
 
+.draggable-input::placeholder {
+  color: #666;
+  opacity: 1;
+}
+
 .draggable-input:hover:not(:focus) {
   border-color: #333;
 }
@@ -591,5 +596,50 @@
   font-size: 12px;
   pointer-events: none;
   margin-left: 4px;
+}
+
+/* Switch component styles (shadcn-style) */
+.switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 44px;
+  height: 24px;
+  padding: 0;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.switch:hover {
+  border-color: #333;
+}
+
+.switch:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.switch-checked {
+  background: #ffffff;
+  border-color: #ffffff;
+}
+
+.switch-thumb {
+  display: block;
+  width: 20px;
+  height: 20px;
+  background: #666;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+  transform: translateX(2px);
+}
+
+.switch-checked .switch-thumb {
+  background: #0a0a0a;
+  transform: translateX(20px);
 }
 
