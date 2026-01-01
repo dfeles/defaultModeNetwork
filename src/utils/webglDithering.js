@@ -431,7 +431,8 @@ export async function applyWebGLColorPalette(image, options = {}) {
 export async function applyWebGLAscii(image, options = {}) {
   const {
     cellSize = 8,
-    charSet = 'standard'
+    charSet = 'standard',
+    invert = false
   } = options;
 
   const charSetString = ASCII_PRESETS[charSet] || ASCII_PRESETS['standard'];
@@ -504,6 +505,7 @@ export async function applyWebGLAscii(image, options = {}) {
           material.uniforms.tDiffuse.value = loadedTexture;
           material.uniforms.uResolution.value.set(targetWidth, targetHeight);
           material.uniforms.uCellSize.value = cellSize;
+          material.uniforms.uInvert.value = invert;
           
           // Wait for character atlas to be created (will use cache if available)
           await material.setCharSet(charSetString);

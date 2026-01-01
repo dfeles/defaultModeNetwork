@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, Eye } from 'lucide-react';
 import { ASCII_PRESETS } from '../components/shaders/AsciiMaterial';
+import { getCharPath } from '../utils/asciiCharPaths';
 import './ExportPanel.css';
 
 // Simple switch component (shadcn-style)
@@ -265,10 +266,259 @@ function DraggableNumberInput({ value, onChange, min, max, step = 1, unit = '', 
   );
 }
 
-function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange, ditheringResolution, onDitheringResolutionChange, ditheringThreshold, onDitheringThresholdChange, ditheringContrast, onDitheringContrastChange, ditheringBrightness, onDitheringBrightnessChange, ditheringGradient, onDitheringGradientChange, ditheringMethod, onDitheringMethodChange, onDitheringReset, applyColorPalette, onColorPaletteChange, colorPalette, onColorPaletteValueChange, colorPaletteCount, onColorPaletteCountChange, onColorPaletteReset, applyAscii, onAsciiChange, asciiCellSize, onAsciiCellSizeChange, asciiCharSet, onAsciiCharSetChange, onAsciiReset, exportMode, onExportModeChange, stlExportMode, onStlExportModeChange, pixelFilter, onPixelFilterChange, renderBackground, onRenderBackgroundChange, strokeColor, onStrokeColorChange, strokeWidth, onStrokeWidthChange, exportFormat, onExportFormatChange, pngSizeInput, onPngSizeInputChange, imageData }) {
+// Character Set Preview Modal
+function CharacterSetPreviewModal({ isOpen, onClose, asciiCharSet, onSelect }) {
+  const [previewCanvases, setPreviewCanvases] = useState(new Map());
+  
+  useEffect(() => {
+    if (!isOpen) return;
+    
+    // Generate gradient previews for each character set
+    const canvases = new Map();
+    const cellSize = 24; // Smaller cells to show more characters
+    const gradientWidth = 512; // Wider to show more characters
+    const gradientHeight = cellSize;
+    
+    const generatePreviews = async () => {
+      const promises = Object.entries(ASCII_PRESETS).map(async ([key, chars]) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = gradientWidth;
+        canvas.height = gradientHeight;
+        const ctx = canvas.getContext('2d');
+        
+        // Clear with black background
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, gradientWidth, gradientHeight);
+        
+        // Set up stroke style
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = Math.max(1, cellSize / 20);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        
+        // Draw gradient: show all characters from darkest to lightest
+        // Use the full character set, showing each character in sequence
+        const numCells = Math.min(chars.length, Math.floor(gradientWidth / cellSize));
+        const imagePromises = [];
+        
+        for (let i = 0; i < numCells; i++) {
+          // Map position to character index (0 to chars.length - 1)
+          const charIndex = Math.floor((i / (numCells - 1)) * (chars.length - 1));
+          const char = chars[charIndex] || chars[chars.length - 1];
+          
+          const x = i * cellSize;
+          const pathData = getCharPath(char, cellSize);
+          
+          if (pathData && pathData.trim()) {
+            // Character has a path - render it
+            try {
+              ctx.save();
+              ctx.translate(x, 0);
+              const path = new Path2D(pathData);
+              ctx.stroke(path);
+              ctx.restore();
+            } catch (error) {
+              // Fallback: try SVG approach
+              const svgNS = 'http://www.w3.org/2000/svg';
+              const svg = document.createElementNS(svgNS, 'svg');
+              svg.setAttribute('width', cellSize);
+              svg.setAttribute('height', cellSize);
+              svg.setAttribute('viewBox', `0 0 ${cellSize} ${cellSize}`);
+              
+              const pathElement = document.createElementNS(svgNS, 'path');
+              pathElement.setAttribute('d', pathData);
+              pathElement.setAttribute('fill', 'none');
+              pathElement.setAttribute('stroke', '#ffffff');
+              pathElement.setAttribute('stroke-width', ctx.lineWidth.toString());
+              pathElement.setAttribute('stroke-linecap', 'round');
+              pathElement.setAttribute('stroke-linejoin', 'round');
+              svg.appendChild(pathElement);
+              
+              const svgData = new XMLSerializer().serializeToString(svg);
+              const img = new Image();
+              const blob = new Blob([svgData], { type: 'image/svg+xml' });
+              const url = URL.createObjectURL(blob);
+              
+              const imagePromise = new Promise((resolve) => {
+                img.onload = () => {
+                  ctx.drawImage(img, x, 0, cellSize, cellSize);
+                  URL.revokeObjectURL(url);
+                  resolve();
+                };
+                img.onerror = () => {
+                  URL.revokeObjectURL(url);
+                  resolve();
+                };
+                img.src = url;
+              });
+              
+              imagePromises.push(imagePromise);
+            }
+          } else if (char === ' ' || char === '\u00A0') {
+            // Space character - draw a small dot to indicate it exists
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(x + cellSize / 2, cellSize / 2, 1, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#000000'; // Reset
+          }
+        }
+        
+        // Wait for all images to load
+        await Promise.all(imagePromises);
+        
+        return [key, canvas.toDataURL()];
+      });
+      
+      const results = await Promise.all(promises);
+      const newCanvases = new Map(results);
+      setPreviewCanvases(newCanvases);
+    };
+    
+    generatePreviews();
+  }, [isOpen]);
+  
+  if (!isOpen) return null;
+  
+  return (
+    <div 
+      className="modal-overlay" 
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.7)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 10000
+      }}
+    >
+      <div 
+        className="modal-content"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          backgroundColor: '#1a1a1a',
+          borderRadius: '8px',
+          padding: '24px',
+          maxWidth: '600px',
+          maxHeight: '80vh',
+          overflow: 'auto',
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)'
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <h2 style={{ margin: 0, color: '#fff', fontSize: '18px', fontWeight: 600 }}>Character Set Preview</h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#fff',
+              fontSize: '24px',
+              cursor: 'pointer',
+              padding: '0',
+              width: '24px',
+              height: '24px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            ×
+          </button>
+        </div>
+        
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {Object.keys(ASCII_PRESETS).map((key) => {
+            const isSelected = key === asciiCharSet;
+            return (
+              <div
+                key={key}
+                onClick={() => {
+                  onSelect(key);
+                  onClose();
+                }}
+                style={{
+                  border: `2px solid ${isSelected ? '#4a9eff' : '#333'}`,
+                  borderRadius: '6px',
+                  padding: '12px',
+                  cursor: 'pointer',
+                  backgroundColor: isSelected ? '#1e3a5f' : '#222',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSelected) {
+                    e.currentTarget.style.backgroundColor = '#2a2a2a';
+                    e.currentTarget.style.borderColor = '#555';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isSelected) {
+                    e.currentTarget.style.backgroundColor = '#222';
+                    e.currentTarget.style.borderColor = '#333';
+                  }
+                }}
+              >
+                <div style={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  alignItems: 'center',
+                  marginBottom: '8px'
+                }}>
+                  <span style={{ 
+                    color: '#fff', 
+                    fontWeight: isSelected ? 600 : 400,
+                    fontSize: '14px'
+                  }}>
+                    {key.charAt(0).toUpperCase() + key.slice(1)}
+                    {isSelected && ' ✓'}
+                  </span>
+                  <span style={{ 
+                    color: '#888', 
+                    fontSize: '12px',
+                    fontFamily: 'monospace'
+                  }}>
+                    {ASCII_PRESETS[key].length} chars
+                  </span>
+                </div>
+                {previewCanvases.has(key) && (
+                  <div style={{
+                    backgroundColor: '#000',
+                    borderRadius: '4px',
+                    padding: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <img 
+                      src={previewCanvases.get(key)} 
+                      alt={`${key} preview`}
+                      style={{
+                        maxWidth: '100%',
+                        height: 'auto',
+                        imageRendering: 'pixelated'
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange, ditheringResolution, onDitheringResolutionChange, ditheringThreshold, onDitheringThresholdChange, ditheringContrast, onDitheringContrastChange, ditheringBrightness, onDitheringBrightnessChange, ditheringGradient, onDitheringGradientChange, ditheringMethod, onDitheringMethodChange, onDitheringReset, applyColorPalette, onColorPaletteChange, colorPalette, onColorPaletteValueChange, colorPaletteCount, onColorPaletteCountChange, onColorPaletteReset, applyAscii, onAsciiChange, asciiCellSize, onAsciiCellSizeChange, asciiCharSet, onAsciiCharSetChange, asciiInvert, onAsciiInvertChange, onAsciiReset, exportMode, onExportModeChange, stlExportMode, onStlExportModeChange, pixelFilter, onPixelFilterChange, renderBackground, onRenderBackgroundChange, strokeColor, onStrokeColorChange, strokeWidth, onStrokeWidthChange, exportFormat, onExportFormatChange, pngSizeInput, onPngSizeInputChange, imageData }) {
   const hasContent = hasMesh || hasImage;
   const [isExportExpanded, setIsExportExpanded] = useState(false);
   const [pngSizeInputValue, setPngSizeInputValue] = useState(pngSizeInput || '');
+  const [isCharSetPreviewOpen, setIsCharSetPreviewOpen] = useState(false);
 
   return (
     <div className="export-panel">
@@ -617,18 +867,68 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
                 <div className="control-group">
                   <div className="control-row">
                     <div className="control-label">Character Set</div>
-                    <select
-                      value={asciiCharSet}
-                      onChange={(e) => onAsciiCharSetChange(e.target.value)}
-                      className="export-select"
-                      style={{ flex: 1, marginTop: 0 }}
-                    >
-                      {Object.keys(ASCII_PRESETS).map((key) => (
-                        <option key={key} value={key}>
-                          {key.charAt(0).toUpperCase() + key.slice(1)}
-                        </option>
-                      ))}
-                    </select>
+                    <div style={{ display: 'flex', gap: '8px', flex: 1, alignItems: 'center' }}>
+                      <select
+                        value={asciiCharSet}
+                        onChange={(e) => onAsciiCharSetChange(e.target.value)}
+                        className="export-select"
+                        style={{ flex: 1, marginTop: 0 }}
+                      >
+                        {Object.keys(ASCII_PRESETS).map((key) => (
+                          <option key={key} value={key}>
+                            {key.charAt(0).toUpperCase() + key.slice(1)}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => setIsCharSetPreviewOpen(true)}
+                        style={{
+                          background: '#2a2a2a',
+                          border: '1px solid #444',
+                          borderRadius: '4px',
+                          padding: '6px 8px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#fff',
+                          transition: 'background 0.2s'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#333'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = '#2a2a2a'}
+                        title="Preview character sets"
+                      >
+                        <Eye size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="control-group">
+                  <div className="control-row">
+                    <div className="control-label">Invert</div>
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#ccc' }}>
+                        <input
+                          type="radio"
+                          name="asciiInvert"
+                          checked={!asciiInvert}
+                          onChange={() => onAsciiInvertChange(false)}
+                          style={{ cursor: 'pointer' }}
+                        />
+                        <span>Normal</span>
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#ccc' }}>
+                        <input
+                          type="radio"
+                          name="asciiInvert"
+                          checked={asciiInvert}
+                          onChange={() => onAsciiInvertChange(true)}
+                          style={{ cursor: 'pointer' }}
+                        />
+                        <span>Inverted</span>
+                      </label>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -740,7 +1040,8 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
                 )}
 
                 {/* SVG Export Mode - Only show when SVG is selected */}
-                {exportFormat === 'svg' && (
+                {/* Export Mode - Only show when ASCII is NOT enabled (ASCII always uses optimized paths) */}
+                {exportFormat === 'svg' && !applyAscii && (
                   <div className="control-group">
                     <div className="control-row">
                       <div className="control-label">Export Mode</div>
@@ -759,20 +1060,23 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
                 {/* SVG-specific settings - Only show when SVG is selected */}
                 {exportFormat === 'svg' && (
                   <>
-                    <div className="control-group">
-                      <div className="control-row">
-                        <div className="control-label">Pixel Filter</div>
-                        <select
-                          value={pixelFilter}
-                          onChange={(e) => onPixelFilterChange(e.target.value)}
-                          className="export-select"
-                        >
-                          <option value="both">Both</option>
-                          <option value="black">Black Only</option>
-                          <option value="white">White Only</option>
-                        </select>
+                    {/* Pixel Filter - Only show when ASCII is NOT enabled (ASCII uses character paths, not pixels) */}
+                    {!applyAscii && (
+                      <div className="control-group">
+                        <div className="control-row">
+                          <div className="control-label">Pixel Filter</div>
+                          <select
+                            value={pixelFilter}
+                            onChange={(e) => onPixelFilterChange(e.target.value)}
+                            className="export-select"
+                          >
+                            <option value="both">Both</option>
+                            <option value="black">Black Only</option>
+                            <option value="white">White Only</option>
+                          </select>
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     <div className="control-group">
                       <div className="control-row">
@@ -785,42 +1089,47 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
                       </div>
                     </div>
 
-                    <div className="control-group">
-                      <div className="control-row">
-                        <div className="control-label">Stroke Color</div>
-                        <input
-                          type="color"
-                          value={strokeColor || '#000000'}
-                          onChange={(e) => onStrokeColorChange(e.target.value)}
-                        />
-                        <button
-                          style={{
-                            padding: '4px 8px',
-                            background: strokeColor ? '#1a1a1a' : '#2a2a2a',
-                            border: '1px solid #2a2a2a',
-                            borderRadius: '4px',
-                            color: '#fff',
-                            cursor: 'pointer',
-                            fontSize: '11px'
-                          }}
-                          onClick={() => onStrokeColorChange(strokeColor ? null : '#000000')}
-                        >
-                          {strokeColor ? 'Disable' : 'Enable'}
-                        </button>
-                      </div>
-                    </div>
+                    {/* Stroke Color/Width - Only show when ASCII is NOT enabled (ASCII uses character colors from image) */}
+                    {!applyAscii && (
+                      <>
+                        <div className="control-group">
+                          <div className="control-row">
+                            <div className="control-label">Stroke Color</div>
+                            <input
+                              type="color"
+                              value={strokeColor || '#000000'}
+                              onChange={(e) => onStrokeColorChange(e.target.value)}
+                            />
+                            <button
+                              style={{
+                                padding: '4px 8px',
+                                background: strokeColor ? '#1a1a1a' : '#2a2a2a',
+                                border: '1px solid #2a2a2a',
+                                borderRadius: '4px',
+                                color: '#fff',
+                                cursor: 'pointer',
+                                fontSize: '11px'
+                              }}
+                              onClick={() => onStrokeColorChange(strokeColor ? null : '#000000')}
+                            >
+                              {strokeColor ? 'Disable' : 'Enable'}
+                            </button>
+                          </div>
+                        </div>
 
-                    {strokeColor && (
-                      <div className="control-group">
-                        <DraggableNumberInput
-                          value={strokeWidth}
-                          onChange={(val) => onStrokeWidthChange(val)}
-                          min={0.1}
-                          max={5}
-                          step={0.1}
-                          label="Stroke Width"
-                        />
-                      </div>
+                        {strokeColor && (
+                          <div className="control-group">
+                            <DraggableNumberInput
+                              value={strokeWidth}
+                              onChange={(val) => onStrokeWidthChange(val)}
+                              min={0.1}
+                              max={5}
+                              step={0.1}
+                              label="Stroke Width"
+                            />
+                          </div>
+                        )}
+                      </>
                     )}
                   </>
                 )}
@@ -922,6 +1231,14 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
           </button>
         </div>
       )}
+      
+      {/* Character Set Preview Modal */}
+      <CharacterSetPreviewModal
+        isOpen={isCharSetPreviewOpen}
+        onClose={() => setIsCharSetPreviewOpen(false)}
+        asciiCharSet={asciiCharSet}
+        onSelect={onAsciiCharSetChange}
+      />
     </div>
   );
 }

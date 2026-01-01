@@ -1780,6 +1780,7 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
     applyAscii = false,
     asciiCellSize = 8,
     asciiCharSet = 'standard',
+    asciiInvert = false,
     ditheringResolution = 500,
     ditheringThreshold = 128,
     ditheringContrast = 0,
@@ -1795,9 +1796,12 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
   } = options;
 
   // Create SVG header
-  // Determine background color based on pixel filter
-  const backgroundColor = pixelFilter === 'white' ? 'black' : 
-                         pixelFilter === 'black' ? 'white' : 'white';
+  // Determine background color - use canvas background color (#0a0a0a) to match the UI
+  // For ASCII, use dark background (#0a0a0a) or white if inverted
+  // For pixel-based rendering, use color based on pixel filter
+  const backgroundColor = applyAscii ? (asciiInvert ? '#ffffff' : '#0a0a0a') : 
+                         (pixelFilter === 'white' ? 'black' : 
+                          pixelFilter === 'black' ? 'white' : 'white');
   
   let svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
@@ -1982,9 +1986,8 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
       // Use full cell size (no padding) to match WebGL rendering
       const scaledCellSize = asciiCellSize / scaleFactor;
       
-      // Group characters by color for optimization
-      const charsByColor = new Map();
-      let totalChars = 0;
+      // Collect all characters (no color grouping - all white like WebGL rendering)
+      const chars = [];
       
       for (let cellY = 0; cellY < cellsY; cellY++) {
         for (let cellX = 0; cellX < cellsX; cellX++) {
@@ -1997,7 +2000,6 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
           // Sample average brightness from the cell
           let totalBrightness = 0;
           let pixelCount = 0;
-          let totalR = 0, totalG = 0, totalB = 0;
           
           for (let y = cellStartY; y < cellEndY; y++) {
             for (let x = cellStartX; x < cellEndX; x++) {
@@ -2010,9 +2012,6 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
               if (a >= 128) { // Only count non-transparent pixels
                 const brightness = (r + g + b) / 3;
                 totalBrightness += brightness;
-                totalR += r;
-                totalG += g;
-                totalB += b;
                 pixelCount++;
               }
             }
@@ -2021,14 +2020,15 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
           if (pixelCount === 0) continue; // Skip empty cells
           
           const avgBrightness = totalBrightness / pixelCount;
-          const avgR = Math.round(totalR / pixelCount);
-          const avgG = Math.round(totalG / pixelCount);
-          const avgB = Math.round(totalB / pixelCount);
           
           // Map brightness to character index
           // Darker = lower index, Lighter = higher index
           // Normalize brightness to 0-1 range
-          const normalizedBrightness = avgBrightness / 255;
+          let normalizedBrightness = avgBrightness / 255;
+          // Invert if needed
+          if (asciiInvert) {
+            normalizedBrightness = 1.0 - normalizedBrightness;
+          }
           // Clamp to avoid edge cases
           const clampedBrightness = Math.min(Math.max(0, normalizedBrightness), 1);
           // Map: 0 brightness -> index 0, 1 brightness -> index (length-1)
@@ -2042,67 +2042,56 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
           const cellPosX = cellStartX / scaleFactor;
           const cellPosY = cellStartY / scaleFactor;
           
-          // Get color
-          const color = rgbToHex(avgR, avgG, avgB);
-          
-          // Group by color
-          if (!charsByColor.has(color)) {
-            charsByColor.set(color, []);
-          }
-          charsByColor.get(color).push({
+          chars.push({
             x: cellPosX,
             y: cellPosY,
             char: char
           });
-          totalChars++;
         }
       }
       
-      console.log(`Generated ${charsByColor.size} color groups with ${totalChars} ASCII characters total`);
+      console.log(`Generated ${chars.length} ASCII characters total`);
       
-      if (totalChars === 0) {
+      if (chars.length === 0) {
         console.warn('No ASCII characters generated - image might be empty or all transparent');
         svg += '  <!-- No ASCII characters to render -->\n';
       } else {
-        // Convert characters to paths and render grouped by color
+        // Convert characters to paths and render all in white (matching WebGL rendering)
         const charPathCache = new Map(); // Cache character paths
         
         console.log('Converting characters to SVG paths using preset line icons...');
         
-        charsByColor.forEach((chars, color) => {
-          // Use stroke width proportional to cell size (matching WebGL rendering)
-          const strokeWidth = Math.max(0.5, scaledCellSize / 20);
-          svg += `  <g fill="none" stroke="${color}" stroke-width="${strokeWidth.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round">\n`;
-          
-          chars.forEach(({ x, y, char }) => {
-            // Get or create path for this character
-            // Use full cell size (no padding) to match WebGL rendering
-            let charPath = charPathCache.get(char);
-            if (!charPath) {
-              charPath = charToPath(char, scaledCellSize);
-              if (charPath) {
-                charPathCache.set(char, charPath);
-              }
+        // Render all characters with stroke color (white for normal, black for inverted)
+        // Use stroke width proportional to cell size (matching WebGL rendering)
+        const strokeWidth = Math.max(0.5, scaledCellSize / 20);
+        const strokeColor = asciiInvert ? '#000000' : '#ffffff';
+        svg += `  <g fill="none" stroke="${strokeColor}" stroke-width="${strokeWidth.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round">\n`;
+        
+        chars.forEach(({ x, y, char }) => {
+          // Get or create path for this character
+          // Use full cell size (no padding) to match WebGL rendering
+          let charPath = charPathCache.get(char);
+          if (!charPath) {
+            charPath = charToPath(char, scaledCellSize);
+            if (charPath) {
+              charPathCache.set(char, charPath);
             }
-            
-            if (charPath && charPath.path) {
-              // Transform path to correct position
-              // The path is defined for a cell of size scaledCellSize, positioned at top-left
-              svg += `    <g transform="translate(${x.toFixed(2)},${y.toFixed(2)})">\n`;
-              svg += `      <path d="${charPath.path}"/>\n`;
-              svg += `    </g>\n`;
-            }
-          });
+          }
           
-          svg += `  </g>\n`;
+          if (charPath && charPath.path) {
+            // Transform path to correct position
+            // The path is defined for a cell of size scaledCellSize, positioned at top-left
+            svg += `    <g transform="translate(${x.toFixed(2)},${y.toFixed(2)})">\n`;
+            svg += `      <path d="${charPath.path}"/>\n`;
+            svg += `    </g>\n`;
+          }
         });
+        
+        svg += `  </g>\n`;
         
         console.log(`Cached ${charPathCache.size} unique character paths`);
         charPathCache.clear();
       }
-      
-      // Clean up
-      charsByColor.clear();
     } else {
       // Original pixel-based rendering (when ASCII is not enabled)
       const data = processedImageData.data;

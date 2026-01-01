@@ -179,6 +179,7 @@ function App() {
   const [applyAscii, setApplyAscii] = useState(false);
   const [asciiCellSize, setAsciiCellSize] = useState(8); // Cell size in pixels
   const [asciiCharSet, setAsciiCharSet] = useState('standard'); // Character set preset
+  const [asciiInvert, setAsciiInvert] = useState(false); // Invert gradient and background
 
   // Update palette when color count changes
   useEffect(() => {
@@ -531,6 +532,7 @@ function App() {
       const currentApplyAscii = applyAscii;
       const currentAsciiCellSize = asciiCellSize;
       const currentAsciiCharSet = asciiCharSet;
+      const currentAsciiInvert = asciiInvert;
       const currentDitheringResolution = ditheringResolution;
       const currentDitheringThreshold = ditheringThreshold;
       const currentDitheringContrast = ditheringContrast;
@@ -652,7 +654,8 @@ function App() {
               if (currentApplyAscii) {
                 applyWebGLAscii(processCanvas, {
                   cellSize: currentAsciiCellSize,
-                  charSet: currentAsciiCharSet
+                  charSet: currentAsciiCharSet,
+                  invert: currentAsciiInvert
                 }).then((asciiData) => {
                   if (cancelled) return;
                   processCtx.putImageData(asciiData, 0, 0);
@@ -859,7 +862,7 @@ function App() {
         displayCanvas.height = 0;
       }
     };
-  }, [inputMode, imageData, applyDithering, applyColorPalette, colorPalette, applyAscii, asciiCellSize, asciiCharSet, ditheringResolution, ditheringThreshold, ditheringContrast, ditheringBrightness, ditheringMethod, ditheringGradient]);
+  }, [inputMode, imageData, applyDithering, applyColorPalette, colorPalette, applyAscii, asciiCellSize, asciiCharSet, asciiInvert, ditheringResolution, ditheringThreshold, ditheringContrast, ditheringBrightness, ditheringMethod, ditheringGradient]);
 
 
   const handleDefaultFileSelect = React.useCallback(async (filename) => {
@@ -1039,6 +1042,10 @@ function App() {
       setApplyColorPalette(savedState.applyColorPalette || false);
       setColorPaletteCount(savedState.colorPaletteCount || 2);
       setColorPalette(savedState.colorPalette || ['#000000', '#ffffff']);
+      setApplyAscii(savedState.applyAscii || false);
+      setAsciiCellSize(savedState.asciiCellSize || 8);
+      setAsciiCharSet(savedState.asciiCharSet || 'standard');
+      setAsciiInvert(savedState.asciiInvert || false);
       setDitheringMethod(savedState.ditheringMethod || 'floyd-steinberg');
       setExportMode(savedState.exportMode || 'optimized');
       setStlExportMode(savedState.stlExportMode || 'geometric');
@@ -1128,6 +1135,7 @@ function App() {
       applyAscii,
       asciiCellSize,
       asciiCharSet,
+      asciiInvert,
       ditheringMethod,
       exportMode,
       stlExportMode,
@@ -1155,6 +1163,7 @@ function App() {
       applyAscii,
       asciiCellSize,
       asciiCharSet,
+      asciiInvert,
       exportMode,
       stlExportMode,
       pixelFilter,
@@ -1338,7 +1347,8 @@ function App() {
                 if (applyAscii) {
                   applyWebGLAscii(processCanvas, {
                     cellSize: asciiCellSize,
-                    charSet: asciiCharSet
+                    charSet: asciiCharSet,
+                    invert: asciiInvert
                   }).then((asciiData) => {
                     processCtx.putImageData(asciiData, 0, 0);
                     createFinalCanvas();
@@ -1386,7 +1396,8 @@ function App() {
                   if (applyAscii) {
                     applyWebGLAscii(processCanvas, {
                       cellSize: asciiCellSize,
-                      charSet: asciiCharSet
+                      charSet: asciiCharSet,
+                      invert: asciiInvert
                     }).then((asciiData) => {
                       processCtx.putImageData(asciiData, 0, 0);
                       createFinalCanvas();
@@ -1408,7 +1419,8 @@ function App() {
               if (applyAscii) {
                 applyWebGLAscii(processCanvas, {
                   cellSize: asciiCellSize,
-                  charSet: asciiCharSet
+                  charSet: asciiCharSet,
+                  invert: asciiInvert
                 }).then((asciiData) => {
                   processCtx.putImageData(asciiData, 0, 0);
                   createFinalCanvas();
@@ -1483,6 +1495,7 @@ function App() {
               applyAscii,
               asciiCellSize: applyAscii ? asciiCellSize : undefined,
               asciiCharSet: applyAscii ? asciiCharSet : undefined,
+              asciiInvert: applyAscii ? asciiInvert : undefined,
               ditheringResolution: applyDithering ? ditheringResolution : undefined,
               ditheringThreshold: applyDithering ? ditheringThreshold : undefined,
               ditheringContrast: applyDithering ? ditheringContrast : undefined,
@@ -1557,6 +1570,7 @@ function App() {
   const handleAsciiReset = () => {
     setAsciiCellSize(8);
     setAsciiCharSet('standard');
+    setAsciiInvert(false);
     setGeneratedSVG(null); // Clear SVG when settings reset
   };
 
@@ -1694,6 +1708,11 @@ function App() {
               asciiCharSet={asciiCharSet}
               onAsciiCharSetChange={(charSet) => {
                 setAsciiCharSet(charSet);
+                setGeneratedSVG(null);
+              }}
+              asciiInvert={asciiInvert}
+              onAsciiInvertChange={(invert) => {
+                setAsciiInvert(invert);
                 setGeneratedSVG(null);
               }}
               onAsciiReset={handleAsciiReset}
@@ -1972,6 +1991,11 @@ function App() {
         asciiCharSet={asciiCharSet}
         onAsciiCharSetChange={(charSet) => {
           setAsciiCharSet(charSet);
+          setGeneratedSVG(null);
+        }}
+        asciiInvert={asciiInvert}
+        onAsciiInvertChange={(invert) => {
+          setAsciiInvert(invert);
           setGeneratedSVG(null);
         }}
         onAsciiReset={handleAsciiReset}

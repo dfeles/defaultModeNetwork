@@ -5,12 +5,14 @@ import { getCharPath } from '../../utils/asciiCharPaths';
 const charAtlasCache = new Map();
 
 // Character set presets
+// Only includes characters that have paths defined in asciiCharPaths.js
+// Supported: space, ., -, _, |, /, \, +, x, #, =, :, *, @, %, ', `, ^, ", ,, ;, !, ?, [, ], {, }, (, ), <, >, ~, 0-9, A-Z
 export const ASCII_PRESETS = {
   'standard': ' .:-=+*#%@',
-  'dense': ' .\'`^",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$',
+  'dense': ' .\'`^",:;I!><~+_-?][}{1)(|\\/XYZJCLQ0O*#MW8%B@ABCDEFGHKNPSTUV', // Dense set with many supported characters
   'minimal': ' .',
-  'blocks': ' ░▒▓█',
-  'braille': ' ⠀⠁⠂⠃⠄⠅⠆⠇⠈⠉⠊⠋⠌⠍⠎⠏⠐⠑⠒⠓⠔⠕⠖⠗⠘⠙⠚⠛⠜⠝⠞⠟⠠⠡⠢⠣⠤⠥⠦⠧⠨⠩⠪⠫⠬⠭⠮⠯⠰⠱⠲⠳⠴⠵⠶⠷⠸⠹⠺⠻⠼⠽⠾⠿',
+  'blocks': ' ░▒▓█', // Block patterns with different fill levels (25%, 50%, 75%, 100%)
+  'braille': ' ⠀⠁⠂⠃⠄⠅⠆⠇⠈⠉⠊⠋⠌⠍⠎⠏⠐⠑⠒⠓⠔⠕⠖⠗⠘⠙⠚⠛⠜⠝⠞⠟⠠⠡⠢⠣⠤⠥⠦⠧⠨⠩⠪⠫⠬⠭⠮⠯', // Braille patterns with different dot configurations
   'technical': ' .-+*#',
   'matrix': ' 0123456789ABCDEF',
   'hatching': ' /|\\-+'
@@ -33,6 +35,7 @@ const fragmentShader = `
   uniform float uCellSize;
   uniform int uCharSetLength;
   uniform float uCharSet[256]; // Character brightness values (normalized 0-1)
+  uniform bool uInvert; // Invert gradient (darker areas get lighter characters)
   
   varying vec2 vUv;
   
@@ -53,8 +56,9 @@ const fragmentShader = `
     vec3 cellColor = texture2D(tDiffuse, cellCenter).rgb;
     float cellBrightness = calculateBrightness(cellColor);
     
-    // Map brightness to character index
-    int charIndex = int(floor(cellBrightness * float(uCharSetLength)));
+    // Map brightness to character index (invert if needed)
+    float normalizedBrightness = uInvert ? (1.0 - cellBrightness) : cellBrightness;
+    int charIndex = int(floor(normalizedBrightness * float(uCharSetLength)));
     charIndex = clamp(charIndex, 0, uCharSetLength - 1);
     
     // Sample from character atlas
@@ -91,7 +95,8 @@ class AsciiMaterial extends THREE.ShaderMaterial {
         uResolution: { value: new THREE.Vector2(1, 1) },
         uCellSize: { value: 8.0 },
         uCharSetLength: { value: 0 },
-        uCharSet: { value: new Array(256).fill(0.0) }
+        uCharSet: { value: new Array(256).fill(0.0) },
+        uInvert: { value: false }
       }
     });
   }
