@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { RotateCcw } from 'lucide-react';
+import { ASCII_PRESETS } from '../components/shaders/AsciiMaterial';
 import './ExportPanel.css';
 
 // Simple switch component (shadcn-style)
@@ -263,7 +265,7 @@ function DraggableNumberInput({ value, onChange, min, max, step = 1, unit = '', 
   );
 }
 
-function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange, ditheringResolution, onDitheringResolutionChange, ditheringThreshold, onDitheringThresholdChange, ditheringContrast, onDitheringContrastChange, ditheringBrightness, onDitheringBrightnessChange, ditheringColorCount, onDitheringColorCountChange, ditheringColorPalette, onDitheringColorPaletteChange, ditheringGradient, onDitheringGradientChange, ditheringMethod, onDitheringMethodChange, exportMode, onExportModeChange, stlExportMode, onStlExportModeChange, pixelFilter, onPixelFilterChange, renderBackground, onRenderBackgroundChange, strokeColor, onStrokeColorChange, strokeWidth, onStrokeWidthChange, exportFormat, onExportFormatChange, pngSizeInput, onPngSizeInputChange, imageData }) {
+function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, hasMesh, hasImage, inputMode, edgeSettings, onEdgeSettingsChange, applyDithering, onDitheringChange, ditheringResolution, onDitheringResolutionChange, ditheringThreshold, onDitheringThresholdChange, ditheringContrast, onDitheringContrastChange, ditheringBrightness, onDitheringBrightnessChange, ditheringGradient, onDitheringGradientChange, ditheringMethod, onDitheringMethodChange, onDitheringReset, applyColorPalette, onColorPaletteChange, colorPalette, onColorPaletteValueChange, colorPaletteCount, onColorPaletteCountChange, onColorPaletteReset, applyAscii, onAsciiChange, asciiCellSize, onAsciiCellSizeChange, asciiCharSet, onAsciiCharSetChange, onAsciiReset, exportMode, onExportModeChange, stlExportMode, onStlExportModeChange, pixelFilter, onPixelFilterChange, renderBackground, onRenderBackgroundChange, strokeColor, onStrokeColorChange, strokeWidth, onStrokeWidthChange, exportFormat, onExportFormatChange, pngSizeInput, onPngSizeInputChange, imageData }) {
   const hasContent = hasMesh || hasImage;
   const [isExportExpanded, setIsExportExpanded] = useState(false);
   const [pngSizeInputValue, setPngSizeInputValue] = useState(pngSizeInput || '');
@@ -338,6 +340,86 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
             <h3>Effects</h3>
           </div>
           
+          {/* Add Color Palette - Show when color palette is not enabled */}
+          {!applyColorPalette && hasImage && (
+            <div 
+              className="effect-add-item"
+              onClick={() => onColorPaletteChange(true)}
+            >
+              <span className="effect-add-label">Add color palette</span>
+              <span className="effect-add-icon">+</span>
+            </div>
+          )}
+          
+          {/* Color Palette Settings - Only show when color palette is enabled */}
+          {applyColorPalette && hasImage && (
+            <div className="effect-item">
+              <div className="effect-item-header">
+                <span className="effect-item-label">Color Palette</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button
+                    onClick={onColorPaletteReset}
+                    title="Reset to Default Settings"
+                    className="remove-button"
+                    style={{ 
+                      width: '18px',
+                      height: '18px',
+                      padding: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <RotateCcw size={12} />
+                  </button>
+                  <button
+                    className="remove-button"
+                    onClick={() => onColorPaletteChange(false)}
+                    title="Remove Color Palette"
+                  >
+                    −
+                  </button>
+                </div>
+              </div>
+              <div className="dithering-settings">
+                <div className="control-group">
+                  <DraggableNumberInput
+                    value={colorPaletteCount}
+                    onChange={(val) => {
+                      onColorPaletteCountChange(parseInt(val));
+                    }}
+                    min={2}
+                    max={20}
+                    step={1}
+                    label="Colors"
+                  />
+                </div>
+                
+                {colorPaletteCount > 2 && colorPalette && (
+                  <div className="control-group">
+                    <div className="control-label" style={{ marginBottom: '8px' }}>Color Palette</div>
+                    <div className="color-palette-grid">
+                      {colorPalette.map((color, index) => (
+                        <div key={index} className="color-palette-item">
+                          <input
+                            type="color"
+                            value={color}
+                            onChange={(e) => {
+                              const newPalette = [...colorPalette];
+                              newPalette[index] = e.target.value;
+                              onColorPaletteValueChange(newPalette);
+                            }}
+                            className="color-palette-picker"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          
           {/* Add Dithering - Show when dithering is not enabled */}
           {!applyDithering && hasImage && (
             <div 
@@ -354,13 +436,30 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
             <div className="effect-item">
               <div className="effect-item-header">
                 <span className="effect-item-label">Dithering</span>
-                <button
-                  className="remove-button"
-                  onClick={() => onDitheringChange(false)}
-                  title="Remove Dithering"
-                >
-                  −
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button
+                    onClick={onDitheringReset}
+                    title="Reset to Default Settings"
+                    className="remove-button"
+                    style={{ 
+                      width: '18px',
+                      height: '18px',
+                      padding: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <RotateCcw size={12} />
+                  </button>
+                  <button
+                    className="remove-button"
+                    onClick={() => onDitheringChange(false)}
+                    title="Remove Dithering"
+                  >
+                    −
+                  </button>
+                </div>
               </div>
               <div className="dithering-settings">
                 <div className="control-group">
@@ -373,25 +472,19 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
                       style={{ flex: 1, marginTop: 0 }}
                     >
                       <option value="floyd-steinberg">Floyd-Steinberg</option>
-                      <option value="ordered">Ordered (Bayer)</option>
+                      <option value="atkinson">Atkinson</option>
+                      <option value="jarvis-judice-ninke">Jarvis-Judice-Ninke</option>
+                      <option value="stucki">Stucki</option>
+                      <option value="burkes">Burkes</option>
+                      <option value="sierra">Sierra</option>
+                      <option value="sierra-lite">Sierra Lite</option>
+                      <option value="two-row-sierra">Two-Row Sierra</option>
+                      <option value="ordered">Ordered (GL)</option>
                     </select>
                   </div>
                 </div>
                 
-                <div className="control-group">
-                  <DraggableNumberInput
-                    value={ditheringColorCount}
-                    onChange={(val) => {
-                      onDitheringColorCountChange(parseInt(val));
-                    }}
-                    min={2}
-                    max={20}
-                    step={1}
-                    label="Colors"
-                  />
-                </div>
-                
-                {ditheringColorCount > 2 && (
+                {((applyColorPalette && colorPalette && colorPalette.length > 2) || (!applyColorPalette)) && (
                   <div className="control-group">
                     <DraggableNumberInput
                       value={ditheringGradient}
@@ -406,28 +499,6 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
                     <small style={{ display: 'block', marginTop: '6px', color: '#666', fontSize: '11px' }}>
                       {ditheringGradient < 50 ? 'More black early' : ditheringGradient > 50 ? 'More white early' : 'Linear distribution'}
                     </small>
-                  </div>
-                )}
-                
-                {ditheringColorCount > 2 && ditheringColorPalette && (
-                  <div className="control-group">
-                    <div className="control-label" style={{ marginBottom: '8px' }}>Color Palette</div>
-                    <div className="color-palette-grid">
-                      {ditheringColorPalette.map((color, index) => (
-                        <div key={index} className="color-palette-item">
-                          <input
-                            type="color"
-                            value={color}
-                            onChange={(e) => {
-                              const newPalette = [...ditheringColorPalette];
-                              newPalette[index] = e.target.value;
-                              onDitheringColorPaletteChange(newPalette);
-                            }}
-                            className="color-palette-picker"
-                          />
-                        </div>
-                      ))}
-                    </div>
                   </div>
                 )}
                 
@@ -482,6 +553,83 @@ function ExportPanel({ onGenerateSVG, onSaveSVG, generatedSVG, generatedPNG, has
                     step={1}
                     label="Brightness"
                   />
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Add ASCII - Show when ASCII is not enabled */}
+          {!applyAscii && hasImage && (
+            <div 
+              className="effect-add-item"
+              onClick={() => onAsciiChange(true)}
+            >
+              <span className="effect-add-label">Add ASCII (GL)</span>
+              <span className="effect-add-icon">+</span>
+            </div>
+          )}
+          
+          {/* ASCII Settings - Only show when ASCII is enabled */}
+          {applyAscii && hasImage && (
+            <div className="effect-item">
+              <div className="effect-item-header">
+                <span className="effect-item-label">ASCII (GL)</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button
+                    onClick={onAsciiReset}
+                    title="Reset to Default Settings"
+                    className="remove-button"
+                    style={{ 
+                      width: '18px',
+                      height: '18px',
+                      padding: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <RotateCcw size={12} />
+                  </button>
+                  <button
+                    className="remove-button"
+                    onClick={() => onAsciiChange(false)}
+                    title="Remove ASCII"
+                  >
+                    −
+                  </button>
+                </div>
+              </div>
+              <div className="dithering-settings">
+                <div className="control-group">
+                  <DraggableNumberInput
+                    value={asciiCellSize}
+                    onChange={(val) => {
+                      onAsciiCellSizeChange(parseInt(val));
+                    }}
+                    min={2}
+                    max={32}
+                    step={1}
+                    unit="px"
+                    label="Cell Size"
+                  />
+                </div>
+                
+                <div className="control-group">
+                  <div className="control-row">
+                    <div className="control-label">Character Set</div>
+                    <select
+                      value={asciiCharSet}
+                      onChange={(e) => onAsciiCharSetChange(e.target.value)}
+                      className="export-select"
+                      style={{ flex: 1, marginTop: 0 }}
+                    >
+                      {Object.keys(ASCII_PRESETS).map((key) => (
+                        <option key={key} value={key}>
+                          {key.charAt(0).toUpperCase() + key.slice(1)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>

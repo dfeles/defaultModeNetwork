@@ -1,5 +1,19 @@
 import * as THREE from 'three';
-import { applyFloydSteinbergDithering, applyOrderedDithering } from './dithering';
+import { 
+  applyFloydSteinbergDithering, 
+  applyOrderedDithering,
+  applyAtkinsonDithering,
+  applyJarvisJudiceNinkeDithering,
+  applyStuckiDithering,
+  applyBurkesDithering,
+  applySierraDithering,
+  applySierraLiteDithering,
+  applyTwoRowSierraDithering,
+  applyColorPalette as applyColorPaletteQuantization
+} from './dithering';
+import { ditherImageData, applyWebGLColorPalette, applyWebGLAscii } from './webglDithering';
+import { ASCII_PRESETS } from '../components/shaders/AsciiMaterial';
+import { getCharPath } from './asciiCharPaths';
 
 /**
  * Get color band from pixel color (for shading)
@@ -1111,6 +1125,23 @@ function rgbToHex(r, g, b) {
 }
 
 /**
+ * Get SVG path for a character using preset line-based icons
+ * Characters are represented as simple geometric patterns
+ * This now uses the shared utility function
+ */
+function charToPath(char, cellSize) {
+  const path = getCharPath(char, cellSize);
+  
+  if (!path) return null;
+  
+  return {
+    path: path,
+    width: cellSize,
+    height: cellSize
+  };
+}
+
+/**
  * Merge adjacent rectangles of the same color (union and flatten)
  * This significantly reduces file size by combining pixel-level rectangles into larger shapes
  * Uses iterative passes until no more merges are possible
@@ -1737,19 +1768,23 @@ function connectEdgesToPaths(edges, epsilon) {
 /**
  * Export an image texture to SVG with pixels as vector dots/circles
  */
-export function exportImageToSVG(texture, renderer, options = {}) {
+export async function exportImageToSVG(texture, renderer, options = {}) {
   const {
     width = 800,
     height = 800,
     imageWidth = 800,
     imageHeight = 800,
     applyDithering = false,
+    applyColorPalette = false,
+    colorPalette = null,
+    applyAscii = false,
+    asciiCellSize = 8,
+    asciiCharSet = 'standard',
     ditheringResolution = 500,
     ditheringThreshold = 128,
     ditheringContrast = 0,
     ditheringBrightness = 0,
     ditheringColorCount = 2,
-    ditheringColorPalette = null,
     ditheringGradient = 50, // Gradient control (0-100)
     ditheringMethod = 'floyd-steinberg', // 'floyd-steinberg' or 'ordered'
     exportMode = 'optimized', // 'optimized' or 'simple'
@@ -1825,231 +1860,455 @@ export function exportImageToSVG(texture, renderer, options = {}) {
     tempCtx.drawImage(texture.image, 0, 0, processWidth, processHeight);
     
     // Get ImageData
-    const imageData = tempCtx.getImageData(0, 0, processWidth, processHeight);
+    let processedImageData = tempCtx.getImageData(0, 0, processWidth, processHeight);
     
     // Clean up canvas immediately after getting ImageData
     tempCanvas.width = 0;
     tempCanvas.height = 0;
     
-    // Apply dithering if requested (on the downsampled image)
-    let processedImageData = imageData;
+    // Apply color palette quantization if enabled (only if dithering is NOT enabled)
+    // If both are enabled, dithering will use the original image with the color palette
+    if (applyColorPalette && colorPalette && colorPalette.length > 0 && !applyDithering) {
+      // Create a temporary canvas for WebGL color palette quantization
+      const paletteCanvas = document.createElement('canvas');
+      paletteCanvas.width = processWidth;
+      paletteCanvas.height = processHeight;
+      const paletteCtx = paletteCanvas.getContext('2d');
+      paletteCtx.putImageData(processedImageData, 0, 0);
+      
+      try {
+        processedImageData = await applyWebGLColorPalette(paletteCanvas, {
+          colorPalette: colorPalette
+        });
+        // Clean up
+        paletteCanvas.width = 0;
+        paletteCanvas.height = 0;
+      } catch (error) {
+        console.error('Error in WebGL color palette quantization for SVG, falling back to CPU:', error);
+        // Fallback to CPU quantization
+        processedImageData = applyColorPaletteQuantization(processedImageData, colorPalette);
+        paletteCanvas.width = 0;
+        paletteCanvas.height = 0;
+      }
+    }
+    
+    // Apply dithering if requested (on the downsampled image) using WebGL
+    // When both color palette and dithering are enabled, dithering uses the original image with the color palette
     if (applyDithering) {
-      console.log(`Applying Floyd-Steinberg dithering to ${processWidth}x${processHeight} image...`);
-      const ditherFunction = ditheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
-      processedImageData = ditherFunction(
-        imageData, 
-        ditheringColorCount, 
-        ditheringThreshold, 
-        ditheringContrast, 
-        ditheringBrightness,
-        ditheringColorCount > 2 ? ditheringColorPalette : null,
-        ditheringGradient
+      console.log(`Applying ${ditheringMethod} dithering to ${processWidth}x${processHeight} image using WebGL...`);
+      
+      // Use color palette if available, otherwise use 2 colors (black/white)
+      const ditheringPalette = (applyColorPalette && colorPalette && colorPalette.length > 0) 
+        ? colorPalette 
+        : null;
+      const ditheringColorCount = ditheringPalette ? ditheringPalette.length : 2;
+      
+      // Create a temporary canvas for WebGL dithering
+      const ditherCanvas = document.createElement('canvas');
+      ditherCanvas.width = processWidth;
+      ditherCanvas.height = processHeight;
+      const ditherCtx = ditherCanvas.getContext('2d');
+      ditherCtx.putImageData(processedImageData, 0, 0);
+      
+      try {
+        processedImageData = await ditherImageData(ditherCanvas, {
+          resolution: ditheringResolution,
+          threshold: ditheringThreshold,
+          contrast: ditheringContrast,
+          brightness: ditheringBrightness,
+          colorCount: ditheringColorCount,
+          colorPalette: ditheringPalette,
+          gradient: ditheringGradient,
+          method: ditheringMethod
+        });
+      } catch (error) {
+        console.error('Error in WebGL dithering for SVG, falling back to CPU:', error);
+        // Fallback to CPU dithering
+        const ditheringPalette = (applyColorPalette && colorPalette && colorPalette.length > 0) 
+          ? colorPalette 
+          : null;
+        const ditheringColorCount = ditheringPalette ? ditheringPalette.length : 2;
+        
+        let ditherFunction;
+        switch (ditheringMethod) {
+          case 'ordered': ditherFunction = applyOrderedDithering; break;
+          case 'atkinson': ditherFunction = applyAtkinsonDithering; break;
+          case 'jarvis-judice-ninke': ditherFunction = applyJarvisJudiceNinkeDithering; break;
+          case 'stucki': ditherFunction = applyStuckiDithering; break;
+          case 'burkes': ditherFunction = applyBurkesDithering; break;
+          case 'sierra': ditherFunction = applySierraDithering; break;
+          case 'sierra-lite': ditherFunction = applySierraLiteDithering; break;
+          case 'two-row-sierra': ditherFunction = applyTwoRowSierraDithering; break;
+          default: ditherFunction = applyFloydSteinbergDithering; break;
+        }
+        processedImageData = ditherFunction(
+          processedImageData, 
+          ditheringColorCount, 
+          ditheringThreshold, 
+          ditheringContrast, 
+          ditheringBrightness,
+          ditheringPalette,
+          ditheringGradient
+        );
+      }
+      
+      // Clean up
+      ditherCanvas.width = 0;
+      ditherCanvas.height = 0;
+    }
+    
+    // If ASCII is enabled, render as text characters instead of pixels
+    if (applyAscii) {
+      // Save the image data before ASCII processing (we need original for brightness calculation)
+      // processedImageData already has dithering/color palette applied, which is what we want
+      const preAsciiData = new ImageData(
+        new Uint8ClampedArray(processedImageData.data),
+        processedImageData.width,
+        processedImageData.height
       );
-    }
-    
-    const data = processedImageData.data;
-    const pixels = [];
-    
-    // Convert pixels to vector dots
-    // Configuration - different for dithered vs non-dithered
-    let dotRadius, brightnessThreshold, minAlpha, maxDots, stepSize;
-    
-    // Pixel filter threshold (always use midpoint for filtering)
-    const pixelFilterThreshold = 128;
-    
-    if (applyDithering) {
-      // For dithered images: MUST process every pixel to preserve the error-diffused pattern
-      // Dithering creates an organic pattern that will be lost with grid sampling
-      brightnessThreshold = 250; // Only skip pure white (255) for dithered
-      minAlpha = 128;
-      maxDots = 1000000; // Higher limit since we need to capture the pattern
-      // CRITICAL: Always use stepSize = 1 for dithered images to preserve the pattern
-      // The dithering algorithm already created the optimal pattern, we just need to capture it
-      stepSize = 1; // Process every pixel - this is essential for dithered images
-      console.log(`Dithered image: ${processWidth}x${processHeight}, processing every pixel (stepSize=1)`);
-    } else {
-      // For non-dithered images: use sampling to reduce dots
-      dotRadius = 0.6;
-      brightnessThreshold = 245; // Skip very light pixels for non-dithered
-      minAlpha = 128;
-      maxDots = 500000;
-      // Use step size to skip pixels for very large images
-      stepSize = Math.max(1, Math.ceil(Math.sqrt((processWidth * processHeight) / maxDots)));
-    }
-    
-    for (let y = 0; y < processHeight; y += stepSize) {
-      for (let x = 0; x < processWidth; x += stepSize) {
-        // Stop if we've reached max dots
-        if (pixels.length >= maxDots) {
-          console.warn(`Reached maximum dot limit of ${maxDots}, stopping early`);
-          break;
-        }
-        
-        const idx = (y * processWidth + x) * 4;
-        const r = data[idx];
-        const g = data[idx + 1];
-        const b = data[idx + 2];
-        const a = data[idx + 3];
-        
-        // Skip transparent or very transparent pixels
-        if (a < minAlpha) continue;
-        
-        // Calculate brightness
-        const brightness = (r + g + b) / 3;
-        
-        // Filter pixels based on pixelFilter mode
-        if (pixelFilter === 'black') {
-          // Only render dark pixels (black) - brightness below midpoint
-          if (brightness > pixelFilterThreshold) continue;
-        } else if (pixelFilter === 'white') {
-          // Only render light pixels (white) - brightness above midpoint
-          if (brightness <= pixelFilterThreshold) continue;
-        } else {
-          // 'both' - render all pixels (but still skip very light ones for non-dithered)
-          if (!applyDithering && brightness > brightnessThreshold) continue;
-        }
-        
-        // Scale coordinates back to original size if downsampled
-        const scaledX = x / scaleFactor;
-        const scaledY = y / scaleFactor;
-        const pixelSize = 1 / scaleFactor; // Size of each pixel in SVG coordinates
-        
-        if (applyDithering) {
-          // For dithered images: generate black rectangles for dark pixels
-          // Skip light pixels (they're the white background)
-          const color = rgbToHex(r, g, b);
-          pixels.push({
-            x: scaledX,
-            y: scaledY,
-            width: pixelSize,
-            height: pixelSize,
-            color: color,
-            isRect: true
-          });
-        } else {
-          // For non-dithered images: use dots
-          const color = rgbToHex(r, g, b);
-          pixels.push({
-            x: scaledX + 0.5 / scaleFactor,
-            y: scaledY + 0.5 / scaleFactor,
-            color: color,
-            isRect: false
-          });
-        }
-      }
-      if (pixels.length >= maxDots) break;
-    }
-    
-    console.log(`Converting ${pixels.length} pixels to vector dots (step size: ${stepSize})...`);
-    
-    // Group pixels by color for optimization (reduces file size)
-    const dotsByColor = new Map();
-    pixels.forEach(pixel => {
-      if (!dotsByColor.has(pixel.color)) {
-        dotsByColor.set(pixel.color, []);
-      }
-      dotsByColor.get(pixel.color).push(pixel);
-    });
-    
-    console.log(`Grouped ${pixels.length} pixels into ${dotsByColor.size} color groups`);
-    
-    // Helper function to create a valid SVG ID from hex color
-    const colorToId = (hexColor) => {
-      // Remove # and convert to lowercase, replace invalid characters
-      // SVG IDs must start with a letter or underscore, and contain only letters, digits, hyphens, underscores, and periods
-      const clean = hexColor.replace('#', '').toLowerCase();
-      return `color-${clean}`;
-    };
-    
-    // Add shapes to SVG, grouped by color for efficiency
-    // Build SVG string in chunks to avoid memory issues
-    let colorIndex = 0;
-    dotsByColor.forEach((dots, color) => {
-      const groupId = colorToId(color);
-      const groupName = `color-group-${colorIndex}`;
       
-      // When stroke is enabled: no fill, only stroke, and make rectangles smaller
-      const hasStroke = !!strokeColor;
-      const fillAttr = hasStroke ? 'fill="none"' : `fill="${color}"`;
-      const strokeAttr = hasStroke ? `stroke="${strokeColor}" stroke-width="${strokeWidth}"` : 'stroke="none"';
+      // Get character set
+      const charSetString = ASCII_PRESETS[asciiCharSet] || ASCII_PRESETS['standard'];
+      const charSetLength = charSetString.length;
       
-      svg += `  <g id="${groupId}" data-name="${groupName}" ${fillAttr} ${strokeAttr}>\n`;
-      colorIndex++;
+      // Calculate number of cells
+      const cellsX = Math.ceil(processWidth / asciiCellSize);
+      const cellsY = Math.ceil(processHeight / asciiCellSize);
       
-      if (dots.length > 0 && dots[0].isRect) {
-        if (exportMode === 'simple') {
-          // Simple mode: group rectangles by color but render individually
-          console.log(`Simple mode: rendering ${dots.length} pixels for color ${color}...`);
+      console.log(`Rendering ASCII: ${cellsX}x${cellsY} cells with cell size ${asciiCellSize}px, char set length: ${charSetLength}`);
+      
+      // Process each cell using the PRE-ASCII image data
+      const data = preAsciiData.data;
+      // Use full cell size (no padding) to match WebGL rendering
+      const scaledCellSize = asciiCellSize / scaleFactor;
+      
+      // Group characters by color for optimization
+      const charsByColor = new Map();
+      let totalChars = 0;
+      
+      for (let cellY = 0; cellY < cellsY; cellY++) {
+        for (let cellX = 0; cellX < cellsX; cellX++) {
+          // Calculate cell bounds
+          const cellStartX = cellX * asciiCellSize;
+          const cellStartY = cellY * asciiCellSize;
+          const cellEndX = Math.min(cellStartX + asciiCellSize, processWidth);
+          const cellEndY = Math.min(cellStartY + asciiCellSize, processHeight);
           
-          // Output as individual rectangles grouped by color
-          dots.forEach(pixel => {
-            if (hasStroke) {
-              // Make rectangles smaller when stroke is enabled (inset by half stroke width)
-              const inset = strokeWidth / 2;
-              const smallerX = pixel.x + inset;
-              const smallerY = pixel.y + inset;
-              const smallerWidth = Math.max(0, pixel.width - strokeWidth);
-              const smallerHeight = Math.max(0, pixel.height - strokeWidth);
-              svg += `    <rect x="${smallerX.toFixed(2)}" y="${smallerY.toFixed(2)}" width="${smallerWidth.toFixed(2)}" height="${smallerHeight.toFixed(2)}"/>\n`;
-            } else {
-              svg += `    <rect x="${pixel.x.toFixed(2)}" y="${pixel.y.toFixed(2)}" width="${pixel.width.toFixed(2)}" height="${pixel.height.toFixed(2)}"/>\n`;
+          // Sample average brightness from the cell
+          let totalBrightness = 0;
+          let pixelCount = 0;
+          let totalR = 0, totalG = 0, totalB = 0;
+          
+          for (let y = cellStartY; y < cellEndY; y++) {
+            for (let x = cellStartX; x < cellEndX; x++) {
+              const idx = (y * processWidth + x) * 4;
+              const r = data[idx];
+              const g = data[idx + 1];
+              const b = data[idx + 2];
+              const a = data[idx + 3];
+              
+              if (a >= 128) { // Only count non-transparent pixels
+                const brightness = (r + g + b) / 3;
+                totalBrightness += brightness;
+                totalR += r;
+                totalG += g;
+                totalB += b;
+                pixelCount++;
+              }
             }
-          });
-        } else {
-          // Optimized mode (VIP): merge rectangles, then flatten to single path
-          console.log(`Optimized mode: merging ${dots.length} rectangles for color ${color}...`);
-          
-          // When stroke is enabled, make rectangles smaller before merging
-          let rectsToMerge = dots;
-          if (hasStroke) {
-            const inset = strokeWidth / 2;
-            rectsToMerge = dots.map(pixel => ({
-              x: pixel.x + inset,
-              y: pixel.y + inset,
-              width: Math.max(0, pixel.width - strokeWidth),
-              height: Math.max(0, pixel.height - strokeWidth)
-            }));
           }
           
-          const mergedRects = mergeRectangles(rectsToMerge);
-          console.log(`Merged to ${mergedRects.length} rectangles (${((1 - mergedRects.length / dots.length) * 100).toFixed(1)}% reduction)`);
+          if (pixelCount === 0) continue; // Skip empty cells
           
-          // Flatten all rectangles into a single path (union)
-          console.log(`Flattening ${mergedRects.length} rectangles into single path...`);
-          const flattenedPath = flattenRectanglesToPath(mergedRects);
+          const avgBrightness = totalBrightness / pixelCount;
+          const avgR = Math.round(totalR / pixelCount);
+          const avgG = Math.round(totalG / pixelCount);
+          const avgB = Math.round(totalB / pixelCount);
           
-          if (flattenedPath) {
-            // Ensure the path ends with Z (closed) if it doesn't already
-            let finalPath = flattenedPath.trim();
-            if (!finalPath.endsWith('Z') && !finalPath.endsWith('z')) {
-              finalPath += ' Z';
+          // Map brightness to character index
+          // Darker = lower index, Lighter = higher index
+          // Normalize brightness to 0-1 range
+          const normalizedBrightness = avgBrightness / 255;
+          // Clamp to avoid edge cases
+          const clampedBrightness = Math.min(Math.max(0, normalizedBrightness), 1);
+          // Map: 0 brightness -> index 0, 1 brightness -> index (length-1)
+          // But we want to avoid always getting the last character for pure white
+          const charIndex = Math.floor(clampedBrightness * (charSetLength - 1));
+          const clampedIndex = Math.min(Math.max(0, charIndex), charSetLength - 1);
+          const char = charSetString[clampedIndex];
+          
+          // Calculate cell top-left position (scaled to SVG coordinates)
+          // Position at top-left to match WebGL rendering (characters fill entire cell)
+          const cellPosX = cellStartX / scaleFactor;
+          const cellPosY = cellStartY / scaleFactor;
+          
+          // Get color
+          const color = rgbToHex(avgR, avgG, avgB);
+          
+          // Group by color
+          if (!charsByColor.has(color)) {
+            charsByColor.set(color, []);
+          }
+          charsByColor.get(color).push({
+            x: cellPosX,
+            y: cellPosY,
+            char: char
+          });
+          totalChars++;
+        }
+      }
+      
+      console.log(`Generated ${charsByColor.size} color groups with ${totalChars} ASCII characters total`);
+      
+      if (totalChars === 0) {
+        console.warn('No ASCII characters generated - image might be empty or all transparent');
+        svg += '  <!-- No ASCII characters to render -->\n';
+      } else {
+        // Convert characters to paths and render grouped by color
+        const charPathCache = new Map(); // Cache character paths
+        
+        console.log('Converting characters to SVG paths using preset line icons...');
+        
+        charsByColor.forEach((chars, color) => {
+          // Use stroke width proportional to cell size (matching WebGL rendering)
+          const strokeWidth = Math.max(0.5, scaledCellSize / 20);
+          svg += `  <g fill="none" stroke="${color}" stroke-width="${strokeWidth.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round">\n`;
+          
+          chars.forEach(({ x, y, char }) => {
+            // Get or create path for this character
+            // Use full cell size (no padding) to match WebGL rendering
+            let charPath = charPathCache.get(char);
+            if (!charPath) {
+              charPath = charToPath(char, scaledCellSize);
+              if (charPath) {
+                charPathCache.set(char, charPath);
+              }
             }
-            // Output as a single path element with fill-rule for proper rendering
-            svg += `    <path d="${finalPath}" fill-rule="evenodd"/>\n`;
-            console.log(`  Flattened to single path for color ${color}`);
+            
+            if (charPath && charPath.path) {
+              // Transform path to correct position
+              // The path is defined for a cell of size scaledCellSize, positioned at top-left
+              svg += `    <g transform="translate(${x.toFixed(2)},${y.toFixed(2)})">\n`;
+              svg += `      <path d="${charPath.path}"/>\n`;
+              svg += `    </g>\n`;
+            }
+          });
+          
+          svg += `  </g>\n`;
+        });
+        
+        console.log(`Cached ${charPathCache.size} unique character paths`);
+        charPathCache.clear();
+      }
+      
+      // Clean up
+      charsByColor.clear();
+    } else {
+      // Original pixel-based rendering (when ASCII is not enabled)
+      const data = processedImageData.data;
+      const pixels = [];
+      
+      // Convert pixels to vector dots
+      // Configuration - different for dithered vs non-dithered
+      let dotRadius, brightnessThreshold, minAlpha, maxDots, stepSize;
+      
+      // Pixel filter threshold (always use midpoint for filtering)
+      const pixelFilterThreshold = 128;
+      
+      if (applyDithering) {
+        // For dithered images: MUST process every pixel to preserve the error-diffused pattern
+        // Dithering creates an organic pattern that will be lost with grid sampling
+        brightnessThreshold = 250; // Only skip pure white (255) for dithered
+        minAlpha = 128;
+        maxDots = 1000000; // Higher limit since we need to capture the pattern
+        // CRITICAL: Always use stepSize = 1 for dithered images to preserve the pattern
+        // The dithering algorithm already created the optimal pattern, we just need to capture it
+        stepSize = 1; // Process every pixel - this is essential for dithered images
+        console.log(`Dithered image: ${processWidth}x${processHeight}, processing every pixel (stepSize=1)`);
+      } else {
+        // For non-dithered images: use sampling to reduce dots
+        dotRadius = 0.6;
+        brightnessThreshold = 245; // Skip very light pixels for non-dithered
+        minAlpha = 128;
+        maxDots = 500000;
+        // Use step size to skip pixels for very large images
+        stepSize = Math.max(1, Math.ceil(Math.sqrt((processWidth * processHeight) / maxDots)));
+      }
+      
+      for (let y = 0; y < processHeight; y += stepSize) {
+        for (let x = 0; x < processWidth; x += stepSize) {
+          // Stop if we've reached max dots
+          if (pixels.length >= maxDots) {
+            console.warn(`Reached maximum dot limit of ${maxDots}, stopping early`);
+            break;
+          }
+          
+          const idx = (y * processWidth + x) * 4;
+          const r = data[idx];
+          const g = data[idx + 1];
+          const b = data[idx + 2];
+          const a = data[idx + 3];
+          
+          // Skip transparent or very transparent pixels
+          if (a < minAlpha) continue;
+          
+          // Calculate brightness
+          const brightness = (r + g + b) / 3;
+          
+          // Filter pixels based on pixelFilter mode
+          if (pixelFilter === 'black') {
+            // Only render dark pixels (black) - brightness below midpoint
+            if (brightness > pixelFilterThreshold) continue;
+          } else if (pixelFilter === 'white') {
+            // Only render light pixels (white) - brightness above midpoint
+            if (brightness <= pixelFilterThreshold) continue;
           } else {
-            // Fallback: output as individual rectangles if flattening fails
-            // Each rectangle is already a closed shape
-            mergedRects.forEach(rect => {
-              svg += `    <rect x="${rect.x.toFixed(2)}" y="${rect.y.toFixed(2)}" width="${rect.width.toFixed(2)}" height="${rect.height.toFixed(2)}"/>\n`;
+            // 'both' - render all pixels (but still skip very light ones for non-dithered)
+            if (!applyDithering && brightness > brightnessThreshold) continue;
+          }
+          
+          // Scale coordinates back to original size if downsampled
+          const scaledX = x / scaleFactor;
+          const scaledY = y / scaleFactor;
+          const pixelSize = 1 / scaleFactor; // Size of each pixel in SVG coordinates
+          
+          if (applyDithering) {
+            // For dithered images: generate black rectangles for dark pixels
+            // Skip light pixels (they're the white background)
+            const color = rgbToHex(r, g, b);
+            pixels.push({
+              x: scaledX,
+              y: scaledY,
+              width: pixelSize,
+              height: pixelSize,
+              color: color,
+              isRect: true
+            });
+          } else {
+            // For non-dithered images: use dots
+            const color = rgbToHex(r, g, b);
+            pixels.push({
+              x: scaledX + 0.5 / scaleFactor,
+              y: scaledY + 0.5 / scaleFactor,
+              color: color,
+              isRect: false
             });
           }
         }
-      } else {
-        // For non-dithered images: group circles by color
-        console.log(`Rendering ${dots.length} circles for color ${color}...`);
-        dots.forEach(dot => {
-          svg += `    <circle cx="${dot.x.toFixed(1)}" cy="${dot.y.toFixed(1)}" r="${(dotRadius / scaleFactor).toFixed(2)}"/>\n`;
-        });
+        if (pixels.length >= maxDots) break;
       }
-      svg += `  </g>\n`;
-    });
-    
-    console.log(`Generated SVG with ${pixels.length} dots in ${dotsByColor.size} color groups`);
-    
-    // Clean up large intermediate data structures
-    pixels.length = 0; // Clear pixel array
-    dotsByColor.clear(); // Clear color map
+      
+      console.log(`Converting ${pixels.length} pixels to vector dots (step size: ${stepSize})...`);
+      
+      // Group pixels by color for optimization (reduces file size)
+      const dotsByColor = new Map();
+      pixels.forEach(pixel => {
+        if (!dotsByColor.has(pixel.color)) {
+          dotsByColor.set(pixel.color, []);
+        }
+        dotsByColor.get(pixel.color).push(pixel);
+      });
+      
+      console.log(`Grouped ${pixels.length} pixels into ${dotsByColor.size} color groups`);
+      
+      // Helper function to create a valid SVG ID from hex color
+      const colorToId = (hexColor) => {
+        // Remove # and convert to lowercase, replace invalid characters
+        // SVG IDs must start with a letter or underscore, and contain only letters, digits, hyphens, underscores, and periods
+        const clean = hexColor.replace('#', '').toLowerCase();
+        return `color-${clean}`;
+      };
+      
+      // Add shapes to SVG, grouped by color for efficiency
+      // Build SVG string in chunks to avoid memory issues
+      let colorIndex = 0;
+      dotsByColor.forEach((dots, color) => {
+        const groupId = colorToId(color);
+        const groupName = `color-group-${colorIndex}`;
+        
+        // When stroke is enabled: no fill, only stroke, and make rectangles smaller
+        const hasStroke = !!strokeColor;
+        const fillAttr = hasStroke ? 'fill="none"' : `fill="${color}"`;
+        const strokeAttr = hasStroke ? `stroke="${strokeColor}" stroke-width="${strokeWidth}"` : 'stroke="none"';
+        
+        svg += `  <g id="${groupId}" data-name="${groupName}" ${fillAttr} ${strokeAttr}>\n`;
+        colorIndex++;
+        
+        if (dots.length > 0 && dots[0].isRect) {
+          if (exportMode === 'simple') {
+            // Simple mode: group rectangles by color but render individually
+            console.log(`Simple mode: rendering ${dots.length} pixels for color ${color}...`);
+            
+            // Output as individual rectangles grouped by color
+            dots.forEach(pixel => {
+              if (hasStroke) {
+                // Make rectangles smaller when stroke is enabled (inset by half stroke width)
+                const inset = strokeWidth / 2;
+                const smallerX = pixel.x + inset;
+                const smallerY = pixel.y + inset;
+                const smallerWidth = Math.max(0, pixel.width - strokeWidth);
+                const smallerHeight = Math.max(0, pixel.height - strokeWidth);
+                svg += `    <rect x="${smallerX.toFixed(2)}" y="${smallerY.toFixed(2)}" width="${smallerWidth.toFixed(2)}" height="${smallerHeight.toFixed(2)}"/>\n`;
+              } else {
+                svg += `    <rect x="${pixel.x.toFixed(2)}" y="${pixel.y.toFixed(2)}" width="${pixel.width.toFixed(2)}" height="${pixel.height.toFixed(2)}"/>\n`;
+              }
+            });
+          } else {
+            // Optimized mode (VIP): merge rectangles, then flatten to single path
+            console.log(`Optimized mode: merging ${dots.length} rectangles for color ${color}...`);
+            
+            // When stroke is enabled, make rectangles smaller before merging
+            let rectsToMerge = dots;
+            if (hasStroke) {
+              const inset = strokeWidth / 2;
+              rectsToMerge = dots.map(pixel => ({
+                x: pixel.x + inset,
+                y: pixel.y + inset,
+                width: Math.max(0, pixel.width - strokeWidth),
+                height: Math.max(0, pixel.height - strokeWidth)
+              }));
+            }
+            
+            const mergedRects = mergeRectangles(rectsToMerge);
+            console.log(`Merged to ${mergedRects.length} rectangles (${((1 - mergedRects.length / dots.length) * 100).toFixed(1)}% reduction)`);
+            
+            // Flatten all rectangles into a single path (union)
+            console.log(`Flattening ${mergedRects.length} rectangles into single path...`);
+            const flattenedPath = flattenRectanglesToPath(mergedRects);
+            
+            if (flattenedPath) {
+              // Ensure the path ends with Z (closed) if it doesn't already
+              let finalPath = flattenedPath.trim();
+              if (!finalPath.endsWith('Z') && !finalPath.endsWith('z')) {
+                finalPath += ' Z';
+              }
+              // Output as a single path element with fill-rule for proper rendering
+              svg += `    <path d="${finalPath}" fill-rule="evenodd"/>\n`;
+              console.log(`  Flattened to single path for color ${color}`);
+            } else {
+              // Fallback: output as individual rectangles if flattening fails
+              // Each rectangle is already a closed shape
+              mergedRects.forEach(rect => {
+                svg += `    <rect x="${rect.x.toFixed(2)}" y="${rect.y.toFixed(2)}" width="${rect.width.toFixed(2)}" height="${rect.height.toFixed(2)}"/>\n`;
+              });
+            }
+          }
+        } else {
+          // For non-dithered images: group circles by color
+          console.log(`Rendering ${dots.length} circles for color ${color}...`);
+          dots.forEach(dot => {
+            svg += `    <circle cx="${dot.x.toFixed(1)}" cy="${dot.y.toFixed(1)}" r="${(dotRadius / scaleFactor).toFixed(2)}"/>\n`;
+          });
+        }
+        svg += `  </g>\n`;
+      });
+      
+      console.log(`Generated SVG with ${pixels.length} dots in ${dotsByColor.size} color groups`);
+      
+      // Clean up large intermediate data structures
+      pixels.length = 0; // Clear pixel array
+      dotsByColor.clear(); // Clear color map
+    }
     
   } catch (error) {
     console.error('Error exporting image to SVG:', error);

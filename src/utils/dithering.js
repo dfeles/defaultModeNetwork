@@ -1,4 +1,40 @@
 /**
+ * Apply color palette quantization to ImageData (without dithering)
+ * Simply maps each pixel to the closest color in the palette
+ * @param {ImageData} imageData - The image data to quantize
+ * @param {Array<string>} colorPalette - Array of hex color strings for palette quantization
+ */
+export function applyColorPalette(imageData, colorPalette) {
+  if (!colorPalette || colorPalette.length === 0) {
+    return imageData;
+  }
+  
+  const data = imageData.data;
+  const width = imageData.width;
+  const height = imageData.height;
+  
+  const output = new ImageData(new Uint8ClampedArray(data.length), width, height);
+  const outputData = output.data;
+  
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const a = data[i + 3];
+    
+    // Find closest color in palette
+    const [quantizedR, quantizedG, quantizedB] = findClosestColor(r, g, b, colorPalette);
+    
+    outputData[i] = quantizedR;
+    outputData[i + 1] = quantizedG;
+    outputData[i + 2] = quantizedB;
+    outputData[i + 3] = a; // Alpha unchanged
+  }
+  
+  return output;
+}
+
+/**
  * Apply contrast adjustment to a pixel value
  * @param {number} value - Pixel value (0-255)
  * @param {number} contrast - Contrast adjustment (-100 to 100, where 0 is no change)
@@ -222,6 +258,190 @@ export function applyFloydSteinbergDithering(imageData, levels = 2, threshold = 
   }
   
   return output;
+}
+
+/**
+ * Generic error diffusion dithering function
+ * @param {ImageData} imageData - The image data to dither
+ * @param {Array} errorMatrix - Error distribution matrix
+ * @param {number} levels - Number of quantization levels
+ * @param {number} threshold - Threshold for quantization
+ * @param {number} contrast - Contrast adjustment
+ * @param {number} brightness - Brightness adjustment
+ * @param {Array<string>} colorPalette - Color palette
+ * @param {number} gradient - Gradient control
+ */
+function applyErrorDiffusion(imageData, errorMatrix, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+  const data = imageData.data;
+  const width = imageData.width;
+  const height = imageData.height;
+  
+  const output = new ImageData(new Uint8ClampedArray(data.length), width, height);
+  const outputData = output.data;
+  
+  // Copy original data and apply contrast/brightness adjustments
+  for (let i = 0; i < data.length; i += 4) {
+    outputData[i] = applyBrightness(applyContrast(data[i], contrast), brightness);
+    outputData[i + 1] = applyBrightness(applyContrast(data[i + 1], contrast), brightness);
+    outputData[i + 2] = applyBrightness(applyContrast(data[i + 2], contrast), brightness);
+    outputData[i + 3] = data[i + 3];
+  }
+  
+  // Build color palette
+  let palette = null;
+  if (colorPalette && colorPalette.length > 0) {
+    palette = colorPalette;
+  } else if (levels === 2) {
+    palette = ['#000000', '#ffffff'];
+  } else {
+    palette = [];
+    for (let i = 0; i < levels; i++) {
+      const gray = Math.round((i / (levels - 1)) * 255);
+      const hex = '#' + [gray, gray, gray].map(x => {
+        const hex = x.toString(16);
+        return hex.length === 1 ? '0' + hex : hex;
+      }).join('');
+      palette.push(hex);
+    }
+  }
+  
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      
+      let r = outputData[idx];
+      let g = outputData[idx + 1];
+      let b = outputData[idx + 2];
+      
+      // Apply gradient curve
+      if (gradient !== 50 && palette && palette.length > 2) {
+        const pixelBrightness = 0.299 * r + 0.587 * g + 0.114 * b;
+        const adjustedBrightness = applyGradientCurve(pixelBrightness, gradient);
+        const scale = adjustedBrightness / Math.max(pixelBrightness, 0.001);
+        r = Math.min(255, Math.max(0, r * scale));
+        g = Math.min(255, Math.max(0, g * scale));
+        b = Math.min(255, Math.max(0, b * scale));
+      }
+      
+      // Find closest color in palette
+      const [quantizedR, quantizedG, quantizedB] = findClosestColor(r, g, b, palette);
+      
+      // Calculate error
+      const errorR = r - quantizedR;
+      const errorG = g - quantizedG;
+      const errorB = b - quantizedB;
+      
+      // Set quantized value
+      outputData[idx] = quantizedR;
+      outputData[idx + 1] = quantizedG;
+      outputData[idx + 2] = quantizedB;
+      
+      // Distribute error according to matrix
+      for (const [dx, dy, weight] of errorMatrix) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          const nIdx = (ny * width + nx) * 4;
+          outputData[nIdx] = Math.min(255, Math.max(0, outputData[nIdx] + errorR * weight));
+          outputData[nIdx + 1] = Math.min(255, Math.max(0, outputData[nIdx + 1] + errorG * weight));
+          outputData[nIdx + 2] = Math.min(255, Math.max(0, outputData[nIdx + 2] + errorB * weight));
+        }
+      }
+    }
+  }
+  
+  return output;
+}
+
+/**
+ * Apply Atkinson dithering
+ */
+export function applyAtkinsonDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+  // Atkinson error distribution matrix (1/8 weight for each)
+  const atkinsonMatrix = [
+    [1, 0, 1/8],
+    [2, 0, 1/8],
+    [-1, 1, 1/8],
+    [0, 1, 1/8],
+    [1, 1, 1/8],
+    [0, 2, 1/8]
+  ];
+  return applyErrorDiffusion(imageData, atkinsonMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+}
+
+/**
+ * Apply Jarvis-Judice-Ninke dithering
+ */
+export function applyJarvisJudiceNinkeDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+  // Jarvis-Judice-Ninke error distribution matrix (48 total weight)
+  const jjnMatrix = [
+    [1, 0, 7/48], [2, 0, 5/48],
+    [-2, 1, 3/48], [-1, 1, 5/48], [0, 1, 7/48], [1, 1, 5/48], [2, 1, 3/48],
+    [-2, 2, 1/48], [-1, 2, 3/48], [0, 2, 5/48], [1, 2, 3/48], [2, 2, 1/48]
+  ];
+  return applyErrorDiffusion(imageData, jjnMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+}
+
+/**
+ * Apply Stucki dithering
+ */
+export function applyStuckiDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+  // Stucki error distribution matrix (42 total weight)
+  const stuckiMatrix = [
+    [1, 0, 8/42], [2, 0, 4/42],
+    [-2, 1, 2/42], [-1, 1, 4/42], [0, 1, 8/42], [1, 1, 4/42], [2, 1, 2/42],
+    [-2, 2, 1/42], [-1, 2, 2/42], [0, 2, 4/42], [1, 2, 2/42], [2, 2, 1/42]
+  ];
+  return applyErrorDiffusion(imageData, stuckiMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+}
+
+/**
+ * Apply Burkes dithering
+ */
+export function applyBurkesDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+  // Burkes error distribution matrix (32 total weight)
+  const burkesMatrix = [
+    [1, 0, 8/32], [2, 0, 4/32],
+    [-2, 1, 2/32], [-1, 1, 4/32], [0, 1, 8/32], [1, 1, 4/32], [2, 1, 2/32]
+  ];
+  return applyErrorDiffusion(imageData, burkesMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+}
+
+/**
+ * Apply Sierra dithering
+ */
+export function applySierraDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+  // Sierra error distribution matrix (32 total weight)
+  const sierraMatrix = [
+    [1, 0, 5/32], [2, 0, 3/32],
+    [-2, 1, 2/32], [-1, 1, 4/32], [0, 1, 5/32], [1, 1, 4/32], [2, 1, 2/32],
+    [-1, 2, 2/32], [0, 2, 3/32], [1, 2, 2/32]
+  ];
+  return applyErrorDiffusion(imageData, sierraMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+}
+
+/**
+ * Apply Sierra Lite dithering
+ */
+export function applySierraLiteDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+  // Sierra Lite error distribution matrix (4 total weight)
+  const sierraLiteMatrix = [
+    [1, 0, 2/4],
+    [-1, 1, 1/4], [0, 1, 1/4]
+  ];
+  return applyErrorDiffusion(imageData, sierraLiteMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+}
+
+/**
+ * Apply Two-Row Sierra dithering
+ */
+export function applyTwoRowSierraDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+  // Two-Row Sierra error distribution matrix (16 total weight)
+  const twoRowSierraMatrix = [
+    [1, 0, 4/16], [2, 0, 3/16],
+    [-2, 1, 1/16], [-1, 1, 2/16], [0, 1, 3/16], [1, 1, 2/16], [2, 1, 1/16]
+  ];
+  return applyErrorDiffusion(imageData, twoRowSierraMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
 }
 
 /**

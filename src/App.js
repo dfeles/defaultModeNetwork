@@ -9,7 +9,19 @@ import ControlPanel from './components/ControlPanel';
 import ExportPanel from './components/ExportPanel';
 import { exportSceneToSVG, downloadSVG, exportImageToSVG } from './utils/svgExporter';
 import { getSTLFileURL, getImageFileURL } from './config/stlFiles';
-import { applyFloydSteinbergDithering, applyOrderedDithering } from './utils/dithering';
+import { 
+  applyFloydSteinbergDithering, 
+  applyOrderedDithering,
+  applyAtkinsonDithering,
+  applyJarvisJudiceNinkeDithering,
+  applyStuckiDithering,
+  applyBurkesDithering,
+  applySierraDithering,
+  applySierraLiteDithering,
+  applyTwoRowSierraDithering,
+  applyColorPalette as applyColorPaletteQuantization
+} from './utils/dithering';
+import { ditherImageData, applyWebGLColorPalette, applyWebGLAscii } from './utils/webglDithering';
 import { saveState, loadState, saveLoadedImages, loadLoadedImages } from './utils/statePersistence';
 
 import { DevOverlay } from 'mindone'
@@ -99,15 +111,13 @@ function ImageExporter({ imageData, onExport, onSVGGenerated, applyDithering, ex
   
   React.useEffect(() => {
     if (imageData && imageData.texture && onSVGGenerated) {
-      const generateFn = () => {
-        const svgString = exportImageToSVG(imageData.texture, gl, {
+      const generateFn = async () => {
+        const svgString = await exportImageToSVG(imageData.texture, gl, {
           width: size.width,
           height: size.height,
           imageWidth: imageData.width,
           imageHeight: imageData.height,
           applyDithering,
-          ditheringColorCount: applyDithering ? ditheringColorCount : undefined,
-          ditheringColorPalette: applyDithering && ditheringColorCount > 2 ? ditheringColorPalette : undefined,
           ditheringMethod: applyDithering ? ditheringMethod : undefined,
           exportMode,
           pixelFilter,
@@ -158,22 +168,30 @@ function App() {
   const [ditheringThreshold, setDitheringThreshold] = useState(128); // Threshold for dithering (0-255)
   const [ditheringContrast, setDitheringContrast] = useState(0); // Contrast adjustment (-100 to 100)
   const [ditheringBrightness, setDitheringBrightness] = useState(0); // Brightness adjustment (-100 to 100)
-  const [ditheringColorCount, setDitheringColorCount] = useState(2); // Number of colors (default: 2 for B&W)
-  const [ditheringColorPalette, setDitheringColorPalette] = useState(['#000000', '#ffffff']); // Color palette array
   const [viewMode, setViewMode] = useState('svg'); // '3d' or 'svg' - start with svg for images
+  
+  // Color Palette as separate effect
+  const [applyColorPalette, setApplyColorPalette] = useState(false);
+  const [colorPalette, setColorPalette] = useState(['#000000', '#ffffff']); // Color palette array
+  const [colorPaletteCount, setColorPaletteCount] = useState(2); // Number of colors in palette
+  
+  // ASCII effect
+  const [applyAscii, setApplyAscii] = useState(false);
+  const [asciiCellSize, setAsciiCellSize] = useState(8); // Cell size in pixels
+  const [asciiCharSet, setAsciiCharSet] = useState('standard'); // Character set preset
 
   // Update palette when color count changes
   useEffect(() => {
-    if (ditheringColorCount === 2) {
-      setDitheringColorPalette(['#000000', '#ffffff']);
-    } else if (ditheringColorPalette.length !== ditheringColorCount) {
+    if (colorPaletteCount === 2) {
+      setColorPalette(['#000000', '#ffffff']);
+    } else if (colorPalette.length !== colorPaletteCount) {
       // Generate rainbow colors if palette doesn't match count
       // Always includes black and white
-      const newPalette = generateRainbowColors(ditheringColorCount);
-      setDitheringColorPalette(newPalette);
+      const newPalette = generateRainbowColors(colorPaletteCount);
+      setColorPalette(newPalette);
     } else {
       // Ensure black and white are always present (first and last positions)
-      const updatedPalette = [...ditheringColorPalette];
+      const updatedPalette = [...colorPalette];
       let needsUpdate = false;
       if (updatedPalette[0] !== '#000000') {
         updatedPalette[0] = '#000000';
@@ -185,10 +203,10 @@ function App() {
       }
       // Only update if something changed
       if (needsUpdate) {
-        setDitheringColorPalette(updatedPalette);
+        setColorPalette(updatedPalette);
       }
     }
-  }, [ditheringColorCount, ditheringColorPalette.length]);
+  }, [colorPaletteCount, colorPalette.length]);
   const [exportMode, setExportMode] = useState('optimized'); // 'optimized' or 'simple' (for images)
   const [stlExportMode, setStlExportMode] = useState('geometric'); // 'geometric' or 'shader' (for 3D)
   const [pixelFilter, setPixelFilter] = useState('both'); // 'white', 'black', or 'both'
@@ -502,25 +520,35 @@ function App() {
     let displayCanvas = null;
     let idleCallbackId = null;
     let timeoutId = null;
+    let isGenerating = false; // Guard to prevent multiple simultaneous calls
     
     if (inputMode === 'image' && imageData && imageData.texture && imageData.texture.image) {
       // Capture current imageData and settings in closure to avoid stale closures
       const currentImageData = imageData;
       const currentApplyDithering = applyDithering;
+      const currentApplyColorPalette = applyColorPalette;
+      const currentColorPalette = colorPalette;
+      const currentApplyAscii = applyAscii;
+      const currentAsciiCellSize = asciiCellSize;
+      const currentAsciiCharSet = asciiCharSet;
       const currentDitheringResolution = ditheringResolution;
       const currentDitheringThreshold = ditheringThreshold;
       const currentDitheringContrast = ditheringContrast;
       const currentDitheringBrightness = ditheringBrightness;
       const currentDitheringMethod = ditheringMethod;
-      const currentDitheringColorCount = ditheringColorCount;
-      const currentDitheringColorPalette = ditheringColorPalette;
       const currentDitheringGradient = ditheringGradient;
       
       const generatePreview = () => {
-        if (cancelled) return;
+        if (cancelled) {
+          isGenerating = false;
+          return;
+        }
+        if (isGenerating) return; // Prevent multiple simultaneous calls
+        isGenerating = true;
         
         // Double-check that the imageData is still valid (hasn't been replaced)
         if (!currentImageData || !currentImageData.texture || !currentImageData.texture.image) {
+          isGenerating = false;
           return;
         }
         
@@ -552,49 +580,49 @@ function App() {
           processCanvas.height = processHeight;
           const processCtx = processCanvas.getContext('2d');
           
-          // Draw the image to the processing canvas (downsampled if dithering)
-          processCtx.drawImage(currentImageData.texture.image, 0, 0, processWidth, processHeight);
-          
-          // Apply dithering if requested (on downsampled image)
-          let imageDataObj = null;
-          let ditheredData = null;
-          if (currentApplyDithering) {
-            imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
-            
-            const ditherFunction = currentDitheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
-            ditheredData = ditherFunction(
-              imageDataObj, 
-              currentDitheringColorCount, 
-              currentDitheringThreshold, 
-              currentDitheringContrast, 
-              currentDitheringBrightness,
-              currentDitheringColorCount > 2 ? currentDitheringColorPalette : null,
-              currentDitheringGradient
-            );
-            
-            processCtx.putImageData(ditheredData, 0, 0);
-          }
-          
-          if (cancelled) {
-            // Clean up if cancelled
-            if (processCanvas) {
-              processCanvas.width = 0;
-              processCanvas.height = 0;
+          // Helper function to create display canvas and set preview
+          const createDisplayCanvas = () => {
+            if (cancelled) {
+              if (processCanvas) {
+                processCanvas.width = 0;
+                processCanvas.height = 0;
+              }
+              isGenerating = false;
+              return;
             }
-            return;
-          }
-          
-          // Create display canvas (original size for preview)
-          displayCanvas = document.createElement('canvas');
-          displayCanvas.width = currentImageData.width;
-          displayCanvas.height = currentImageData.height;
-          const displayCtx = displayCanvas.getContext('2d');
-          
-          // Scale the processed image back up to original size for display
-          displayCtx.drawImage(processCanvas, 0, 0, currentImageData.width, currentImageData.height);
-          
-          if (cancelled) {
-            // Clean up if cancelled
+            
+            // Create display canvas (original size for preview)
+            displayCanvas = document.createElement('canvas');
+            displayCanvas.width = currentImageData.width;
+            displayCanvas.height = currentImageData.height;
+            const displayCtx = displayCanvas.getContext('2d');
+            
+            // If processCanvas is the same size, draw directly; otherwise scale
+            if (processCanvas.width === currentImageData.width && processCanvas.height === currentImageData.height) {
+              displayCtx.drawImage(processCanvas, 0, 0);
+            } else {
+              displayCtx.drawImage(processCanvas, 0, 0, currentImageData.width, currentImageData.height);
+            }
+            
+            if (cancelled) {
+              if (processCanvas) {
+                processCanvas.width = 0;
+                processCanvas.height = 0;
+              }
+              if (displayCanvas) {
+                displayCanvas.width = 0;
+                displayCanvas.height = 0;
+              }
+              isGenerating = false;
+              return;
+            }
+            
+            // Convert to data URL for preview (use JPEG with compression to reduce memory)
+            const previewUrl = displayCanvas.toDataURL('image/jpeg', 0.85);
+            
+            setProcessedPreviewUrl(previewUrl);
+            
+            // Clean up canvases immediately after use
             if (processCanvas) {
               processCanvas.width = 0;
               processCanvas.height = 0;
@@ -603,25 +631,188 @@ function App() {
               displayCanvas.width = 0;
               displayCanvas.height = 0;
             }
-            return;
+            processCanvas = null;
+            displayCanvas = null;
+            isGenerating = false; // Reset guard after completion
+          };
+          
+          // Draw the image to the processing canvas (downsampled if dithering)
+          processCtx.drawImage(currentImageData.texture.image, 0, 0, processWidth, processHeight);
+          
+          // Apply color palette quantization if enabled (only if dithering is NOT enabled)
+          // If both are enabled, dithering will use the original image with the color palette
+          if (currentApplyColorPalette && currentColorPalette && currentColorPalette.length > 0 && !currentApplyDithering) {
+            applyWebGLColorPalette(processCanvas, {
+              colorPalette: currentColorPalette
+            }).then((quantizedData) => {
+              if (cancelled) return;
+              processCtx.putImageData(quantizedData, 0, 0);
+              
+              // Apply ASCII if enabled (after color palette)
+              if (currentApplyAscii) {
+                applyWebGLAscii(processCanvas, {
+                  cellSize: currentAsciiCellSize,
+                  charSet: currentAsciiCharSet
+                }).then((asciiData) => {
+                  if (cancelled) return;
+                  processCtx.putImageData(asciiData, 0, 0);
+                  createDisplayCanvas();
+                }).catch((asciiError) => {
+                  console.error('Error in WebGL ASCII effect:', asciiError);
+                  createDisplayCanvas();
+                });
+              } else {
+                createDisplayCanvas();
+              }
+            }).catch((error) => {
+              console.error('Error in WebGL color palette quantization:', error);
+              // Fallback to CPU quantization
+              try {
+                const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
+                const quantizedData = applyColorPaletteQuantization(imageDataObj, currentColorPalette);
+                processCtx.putImageData(quantizedData, 0, 0);
+                
+                // Apply ASCII if enabled (after color palette)
+                if (currentApplyAscii) {
+                  applyWebGLAscii(processCanvas, {
+                    cellSize: currentAsciiCellSize,
+                    charSet: currentAsciiCharSet
+                  }).then((asciiData) => {
+                    if (cancelled) return;
+                    processCtx.putImageData(asciiData, 0, 0);
+                    createDisplayCanvas();
+                  }).catch((asciiError) => {
+                    console.error('Error in WebGL ASCII effect:', asciiError);
+                    createDisplayCanvas();
+                  });
+                } else {
+                  createDisplayCanvas();
+                }
+              } catch (fallbackError) {
+                console.error('Error in fallback color palette quantization:', fallbackError);
+                createDisplayCanvas();
+              }
+            });
+          } else {
+            // Either no color palette, or dithering is enabled (which will use the original image)
+            if (currentApplyDithering) {
+              continueWithDithering();
+            } else {
+              // No dithering, but check for ASCII effect
+              if (currentApplyAscii) {
+                applyWebGLAscii(processCanvas, {
+                  cellSize: currentAsciiCellSize,
+                  charSet: currentAsciiCharSet
+                }).then((asciiData) => {
+                  if (cancelled) return;
+                  processCtx.putImageData(asciiData, 0, 0);
+                  createDisplayCanvas();
+                }).catch((asciiError) => {
+                  console.error('Error in WebGL ASCII effect:', asciiError);
+                  createDisplayCanvas();
+                });
+              } else {
+                // No effects - just show the original image
+                createDisplayCanvas();
+              }
+            }
           }
           
-          // Convert to data URL for preview (use JPEG with compression to reduce memory)
-          const previewUrl = displayCanvas.toDataURL('image/jpeg', 0.85);
-          
-          setProcessedPreviewUrl(previewUrl);
-          
-          // Clean up canvases immediately after use
-          if (processCanvas) {
-            processCanvas.width = 0;
-            processCanvas.height = 0;
+          // Helper function to continue with dithering
+          function continueWithDithering() {
+            // Use color palette if available, otherwise use 2 colors (black/white)
+            const ditheringPalette = (currentApplyColorPalette && currentColorPalette && currentColorPalette.length > 0) 
+              ? currentColorPalette 
+              : null;
+            const ditheringColorCount = ditheringPalette ? ditheringPalette.length : 2;
+            
+            // Use WebGL dithering
+            ditherImageData(processCanvas, {
+              resolution: currentDitheringResolution,
+              threshold: currentDitheringThreshold,
+              contrast: currentDitheringContrast,
+              brightness: currentDitheringBrightness,
+              colorCount: ditheringColorCount,
+              colorPalette: ditheringPalette,
+              gradient: currentDitheringGradient,
+              method: currentDitheringMethod
+            }).then((ditheredImageData) => {
+              if (cancelled) return;
+              
+              // Put dithered data back to canvas
+              processCtx.putImageData(ditheredImageData, 0, 0);
+              
+              // Apply ASCII effect if enabled (after dithering)
+              if (currentApplyAscii) {
+                applyWebGLAscii(processCanvas, {
+                  cellSize: currentAsciiCellSize,
+                  charSet: currentAsciiCharSet
+                }).then((asciiData) => {
+                  if (cancelled) return;
+                  processCtx.putImageData(asciiData, 0, 0);
+                  createDisplayCanvas();
+                }).catch((asciiError) => {
+                  console.error('Error in WebGL ASCII effect:', asciiError);
+                  createDisplayCanvas();
+                });
+              } else {
+                createDisplayCanvas();
+              }
+            }).catch((error) => {
+              console.error('Error in WebGL dithering:', error);
+              // Fallback to CPU dithering on error
+              try {
+                const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
+                let ditherFunction;
+                switch (currentDitheringMethod) {
+                  case 'ordered': ditherFunction = applyOrderedDithering; break;
+                  case 'atkinson': ditherFunction = applyAtkinsonDithering; break;
+                  case 'jarvis-judice-ninke': ditherFunction = applyJarvisJudiceNinkeDithering; break;
+                  case 'stucki': ditherFunction = applyStuckiDithering; break;
+                  case 'burkes': ditherFunction = applyBurkesDithering; break;
+                  case 'sierra': ditherFunction = applySierraDithering; break;
+                  case 'sierra-lite': ditherFunction = applySierraLiteDithering; break;
+                  case 'two-row-sierra': ditherFunction = applyTwoRowSierraDithering; break;
+                  default: ditherFunction = applyFloydSteinbergDithering; break;
+                }
+                const ditheringPalette = (currentApplyColorPalette && currentColorPalette && currentColorPalette.length > 0) 
+                  ? currentColorPalette 
+                  : null;
+                const ditheringColorCount = ditheringPalette ? ditheringPalette.length : 2;
+                
+                const ditheredData = ditherFunction(
+                  imageDataObj, 
+                  ditheringColorCount, 
+                  currentDitheringThreshold, 
+                  currentDitheringContrast, 
+                  currentDitheringBrightness,
+                  ditheringPalette,
+                  currentDitheringGradient
+                );
+                processCtx.putImageData(ditheredData, 0, 0);
+                
+                // Apply ASCII effect if enabled (after dithering)
+                if (currentApplyAscii) {
+                  applyWebGLAscii(processCanvas, {
+                    cellSize: currentAsciiCellSize,
+                    charSet: currentAsciiCharSet
+                  }).then((asciiData) => {
+                    if (cancelled) return;
+                    processCtx.putImageData(asciiData, 0, 0);
+                    createDisplayCanvas();
+                  }).catch((asciiError) => {
+                    console.error('Error in WebGL ASCII effect:', asciiError);
+                    createDisplayCanvas();
+                  });
+                } else {
+                  createDisplayCanvas();
+                }
+              } catch (fallbackError) {
+                console.error('Error in fallback dithering:', fallbackError);
+                createDisplayCanvas();
+              }
+            });
           }
-          if (displayCanvas) {
-            displayCanvas.width = 0;
-            displayCanvas.height = 0;
-          }
-          processCanvas = null;
-          displayCanvas = null;
         } catch (error) {
           console.error('Error generating preview:', error);
           // Clean up on error
@@ -633,6 +824,7 @@ function App() {
             displayCanvas.width = 0;
             displayCanvas.height = 0;
           }
+          isGenerating = false; // Reset guard on error
         }
       };
       
@@ -667,7 +859,7 @@ function App() {
         displayCanvas.height = 0;
       }
     };
-  }, [inputMode, imageData, applyDithering, ditheringResolution, ditheringThreshold, ditheringContrast, ditheringBrightness, ditheringMethod, ditheringColorCount, ditheringColorPalette, ditheringGradient]);
+  }, [inputMode, imageData, applyDithering, applyColorPalette, colorPalette, applyAscii, asciiCellSize, asciiCharSet, ditheringResolution, ditheringThreshold, ditheringContrast, ditheringBrightness, ditheringMethod, ditheringGradient]);
 
 
   const handleDefaultFileSelect = React.useCallback(async (filename) => {
@@ -843,9 +1035,10 @@ function App() {
       setDitheringThreshold(savedState.ditheringThreshold || 128);
       setDitheringContrast(savedState.ditheringContrast || 0);
       setDitheringBrightness(savedState.ditheringBrightness || 0);
-      setDitheringColorCount(savedState.ditheringColorCount || 2);
-      setDitheringColorPalette(savedState.ditheringColorPalette || ['#000000', '#ffffff']);
       setDitheringGradient(savedState.ditheringGradient || 50);
+      setApplyColorPalette(savedState.applyColorPalette || false);
+      setColorPaletteCount(savedState.colorPaletteCount || 2);
+      setColorPalette(savedState.colorPalette || ['#000000', '#ffffff']);
       setDitheringMethod(savedState.ditheringMethod || 'floyd-steinberg');
       setExportMode(savedState.exportMode || 'optimized');
       setStlExportMode(savedState.stlExportMode || 'geometric');
@@ -928,9 +1121,13 @@ function App() {
       ditheringThreshold,
       ditheringContrast,
       ditheringBrightness,
-      ditheringColorCount,
-      ditheringColorPalette,
       ditheringGradient,
+      applyColorPalette,
+      colorPaletteCount,
+      colorPalette,
+      applyAscii,
+      asciiCellSize,
+      asciiCharSet,
       ditheringMethod,
       exportMode,
       stlExportMode,
@@ -952,8 +1149,12 @@ function App() {
     ditheringThreshold,
     ditheringContrast,
     ditheringBrightness,
-    ditheringColorCount,
-    ditheringColorPalette,
+      applyColorPalette,
+      colorPaletteCount,
+      colorPalette,
+      applyAscii,
+      asciiCellSize,
+      asciiCharSet,
       exportMode,
       stlExportMode,
       pixelFilter,
@@ -1090,45 +1291,166 @@ function App() {
             // Draw the image to the processing canvas
             processCtx.drawImage(imageData.texture.image, 0, 0, processWidth, processHeight);
             
-            // Apply dithering if requested
-            if (applyDithering) {
-              const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
-              const ditherFunction = ditheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
-              const ditheredData = ditherFunction(
-                imageDataObj,
-                ditheringColorCount,
-                ditheringThreshold,
-                ditheringContrast,
-                ditheringBrightness,
-                ditheringColorCount > 2 ? ditheringColorPalette : null,
-                ditheringGradient
-              );
-              processCtx.putImageData(ditheredData, 0, 0);
+            // Process color palette and dithering
+            const processColorPalette = async () => {
+              // Apply color palette quantization if enabled (only if dithering is NOT enabled)
+              // If both are enabled, dithering will use the original image with the color palette
+              if (applyColorPalette && colorPalette && colorPalette.length > 0 && !applyDithering) {
+                try {
+                  const quantizedData = await applyWebGLColorPalette(processCanvas, {
+                    colorPalette: colorPalette
+                  });
+                  processCtx.putImageData(quantizedData, 0, 0);
+                } catch (error) {
+                  console.error('Error in WebGL color palette quantization for PNG:', error);
+                  // Fallback to CPU quantization
+                  try {
+                    const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
+                    const quantizedData = applyColorPaletteQuantization(imageDataObj, colorPalette);
+                    processCtx.putImageData(quantizedData, 0, 0);
+                  } catch (fallbackError) {
+                    console.error('Error in fallback color palette quantization:', fallbackError);
+                  }
+                }
+              }
+              
+              // Apply dithering if requested using WebGL
+              if (applyDithering) {
+              // Use color palette if available, otherwise use 2 colors (black/white)
+              const ditheringPalette = (applyColorPalette && colorPalette && colorPalette.length > 0) 
+                ? colorPalette 
+                : null;
+              const ditheringColorCount = ditheringPalette ? ditheringPalette.length : 2;
+              
+              ditherImageData(processCanvas, {
+                resolution: ditheringResolution,
+                threshold: ditheringThreshold,
+                contrast: ditheringContrast,
+                brightness: ditheringBrightness,
+                colorCount: ditheringColorCount,
+                colorPalette: ditheringPalette,
+                gradient: ditheringGradient,
+                method: ditheringMethod
+              }).then((ditheredImageData) => {
+                processCtx.putImageData(ditheredImageData, 0, 0);
+                
+                // Apply ASCII effect if enabled (after dithering)
+                if (applyAscii) {
+                  applyWebGLAscii(processCanvas, {
+                    cellSize: asciiCellSize,
+                    charSet: asciiCharSet
+                  }).then((asciiData) => {
+                    processCtx.putImageData(asciiData, 0, 0);
+                    createFinalCanvas();
+                  }).catch((asciiError) => {
+                    console.error('Error in WebGL ASCII effect for PNG:', asciiError);
+                    createFinalCanvas();
+                  });
+                } else {
+                  createFinalCanvas();
+                }
+              }).catch((error) => {
+                console.error('Error in WebGL dithering for PNG:', error);
+                // Fallback to CPU dithering
+                try {
+                  const imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
+                  let ditherFunction;
+                  switch (ditheringMethod) {
+                    case 'ordered': ditherFunction = applyOrderedDithering; break;
+                    case 'atkinson': ditherFunction = applyAtkinsonDithering; break;
+                    case 'jarvis-judice-ninke': ditherFunction = applyJarvisJudiceNinkeDithering; break;
+                    case 'stucki': ditherFunction = applyStuckiDithering; break;
+                    case 'burkes': ditherFunction = applyBurkesDithering; break;
+                    case 'sierra': ditherFunction = applySierraDithering; break;
+                    case 'sierra-lite': ditherFunction = applySierraLiteDithering; break;
+                    case 'two-row-sierra': ditherFunction = applyTwoRowSierraDithering; break;
+                    default: ditherFunction = applyFloydSteinbergDithering; break;
+                  }
+                  const ditheringPalette = (applyColorPalette && colorPalette && colorPalette.length > 0) 
+                    ? colorPalette 
+                    : null;
+                  const ditheringColorCount = ditheringPalette ? ditheringPalette.length : 2;
+                  
+                  const ditheredData = ditherFunction(
+                    imageDataObj,
+                    ditheringColorCount,
+                    ditheringThreshold,
+                    ditheringContrast,
+                    ditheringBrightness,
+                    ditheringPalette,
+                    ditheringGradient
+                  );
+                  processCtx.putImageData(ditheredData, 0, 0);
+                  
+                  // Apply ASCII effect if enabled (after dithering)
+                  if (applyAscii) {
+                    applyWebGLAscii(processCanvas, {
+                      cellSize: asciiCellSize,
+                      charSet: asciiCharSet
+                    }).then((asciiData) => {
+                      processCtx.putImageData(asciiData, 0, 0);
+                      createFinalCanvas();
+                    }).catch((asciiError) => {
+                      console.error('Error in WebGL ASCII effect for PNG:', asciiError);
+                      createFinalCanvas();
+                    });
+                  } else {
+                    createFinalCanvas();
+                  }
+                } catch (fallbackError) {
+                  console.error('Error in fallback dithering:', fallbackError);
+                  setIsLoading(false);
+                }
+              });
+            } else {
+              // No dithering, but color palette may have been applied
+              // Apply ASCII if enabled
+              if (applyAscii) {
+                applyWebGLAscii(processCanvas, {
+                  cellSize: asciiCellSize,
+                  charSet: asciiCharSet
+                }).then((asciiData) => {
+                  processCtx.putImageData(asciiData, 0, 0);
+                  createFinalCanvas();
+                }).catch((asciiError) => {
+                  console.error('Error in WebGL ASCII effect for PNG:', asciiError);
+                  createFinalCanvas();
+                });
+              } else {
+                createFinalCanvas();
+              }
             }
             
-            // Create final canvas at target size
-            const finalCanvas = document.createElement('canvas');
-            finalCanvas.width = targetWidth;
-            finalCanvas.height = targetHeight;
-            const finalCtx = finalCanvas.getContext('2d');
+            function createFinalCanvas() {
+              // Create final canvas at target size
+                const finalCanvas = document.createElement('canvas');
+                finalCanvas.width = targetWidth;
+                finalCanvas.height = targetHeight;
+                const finalCtx = finalCanvas.getContext('2d');
+                
+                // Scale the processed image to target size
+                finalCtx.drawImage(processCanvas, 0, 0, targetWidth, targetHeight);
+                
+                // Convert to PNG data URL
+                const pngDataUrl = finalCanvas.toDataURL('image/png');
+                setGeneratedPNG(pngDataUrl);
+                setGeneratedSVG(null); // Clear SVG if it exists
+                
+                // Clean up
+                processCanvas.width = 0;
+                processCanvas.height = 0;
+                finalCanvas.width = 0;
+                finalCanvas.height = 0;
+                
+                setIsLoading(false);
+            }
+            };
             
-            // Scale the processed image to target size
-            finalCtx.drawImage(processCanvas, 0, 0, targetWidth, targetHeight);
-            
-            // Convert to PNG data URL
-            const pngDataUrl = finalCanvas.toDataURL('image/png');
-            setGeneratedPNG(pngDataUrl);
-            setGeneratedSVG(null); // Clear SVG if it exists
-            
-            // Clean up
-            processCanvas.width = 0;
-            processCanvas.height = 0;
-            finalCanvas.width = 0;
-            finalCanvas.height = 0;
+            // Start processing
+            processColorPalette();
           } catch (error) {
             console.error('Error generating PNG:', error);
             alert('Error generating PNG: ' + error.message);
-          } finally {
             setIsLoading(false);
           }
         };
@@ -1142,7 +1464,7 @@ function App() {
         // Generate SVG
         setIsLoading(true);
         
-        const generateSVGAsync = () => {
+        const generateSVGAsync = async () => {
           try {
             const svgWidth = imageData.width;
             const svgHeight = imageData.height;
@@ -1150,19 +1472,22 @@ function App() {
             console.log('Starting SVG generation...');
             const startTime = performance.now();
             
-            const svgString = exportImageToSVG(imageData.texture, null, {
+            const svgString = await exportImageToSVG(imageData.texture, null, {
               width: svgWidth,
               height: svgHeight,
               imageWidth: imageData.width,
               imageHeight: imageData.height,
               applyDithering,
+              applyColorPalette,
+              colorPalette: applyColorPalette && colorPalette && colorPalette.length > 0 ? colorPalette : undefined,
+              applyAscii,
+              asciiCellSize: applyAscii ? asciiCellSize : undefined,
+              asciiCharSet: applyAscii ? asciiCharSet : undefined,
               ditheringResolution: applyDithering ? ditheringResolution : undefined,
               ditheringThreshold: applyDithering ? ditheringThreshold : undefined,
               ditheringContrast: applyDithering ? ditheringContrast : undefined,
               ditheringBrightness: applyDithering ? ditheringBrightness : undefined,
-              ditheringColorCount: applyDithering ? ditheringColorCount : undefined,
-              ditheringColorPalette: applyDithering && ditheringColorCount > 2 ? ditheringColorPalette : undefined,
-              ditheringGradient: applyDithering && ditheringColorCount > 2 ? ditheringGradient : undefined,
+              ditheringGradient: applyDithering ? ditheringGradient : undefined,
               ditheringMethod: applyDithering ? ditheringMethod : undefined,
               exportMode,
               pixelFilter,
@@ -1210,6 +1535,29 @@ function App() {
       // Download SVG
       downloadSVG(generatedSVG, 'export.svg');
     }
+  };
+
+  const handleDitheringReset = () => {
+    setDitheringResolution(500);
+    setDitheringThreshold(128);
+    setDitheringContrast(0);
+    setDitheringBrightness(0);
+    setDitheringColorCount(2);
+    setDitheringGradient(50);
+    setDitheringMethod('floyd-steinberg');
+    setGeneratedSVG(null); // Clear SVG when settings reset
+  };
+
+  const handleColorPaletteReset = () => {
+    setColorPaletteCount(2);
+    setColorPalette(['#000000', '#ffffff']);
+    setGeneratedSVG(null); // Clear SVG when settings reset
+  };
+
+  const handleAsciiReset = () => {
+    setAsciiCellSize(8);
+    setAsciiCharSet('standard');
+    setGeneratedSVG(null); // Clear SVG when settings reset
   };
 
   return (
@@ -1289,6 +1637,11 @@ function App() {
               onDitheringChange={(enabled) => {
                 setApplyDithering(enabled);
                 setGeneratedSVG(null); // Clear SVG when dithering changes
+                setGeneratedPNG(null); // Clear PNG when dithering changes
+                if (!enabled) {
+                  // When dithering is removed, clear processed preview to trigger regeneration
+                  setProcessedPreviewUrl(null);
+                }
               }}
               ditheringResolution={ditheringResolution}
               onDitheringResolutionChange={(resolution) => {
@@ -1310,17 +1663,40 @@ function App() {
                 setDitheringBrightness(brightness);
                 setGeneratedSVG(null); // Clear SVG when brightness changes
               }}
-              ditheringColorCount={ditheringColorCount}
-              onDitheringColorCountChange={(count) => {
-                setDitheringColorCount(count);
-                setGeneratedSVG(null); // Clear SVG when color count changes
+              ditheringGradient={ditheringGradient}
+              applyColorPalette={applyColorPalette}
+              onColorPaletteChange={(enabled) => {
+                setApplyColorPalette(enabled);
+                setGeneratedSVG(null); // Clear SVG when color palette changes
               }}
-              ditheringColorPalette={ditheringColorPalette}
-              onDitheringColorPaletteChange={(palette) => {
-                setDitheringColorPalette(palette);
+              colorPalette={colorPalette}
+              onColorPaletteValueChange={(palette) => {
+                setColorPalette(palette);
                 setGeneratedSVG(null); // Clear SVG when palette changes
               }}
-              ditheringGradient={ditheringGradient}
+              colorPaletteCount={colorPaletteCount}
+              onColorPaletteCountChange={(count) => {
+                setColorPaletteCount(count);
+                setGeneratedSVG(null); // Clear SVG when color count changes
+              }}
+              onColorPaletteReset={handleColorPaletteReset}
+              applyAscii={applyAscii}
+              onAsciiChange={(enabled) => {
+                setApplyAscii(enabled);
+                setGeneratedSVG(null);
+                setGeneratedPNG(null);
+              }}
+              asciiCellSize={asciiCellSize}
+              onAsciiCellSizeChange={(size) => {
+                setAsciiCellSize(size);
+                setGeneratedSVG(null);
+              }}
+              asciiCharSet={asciiCharSet}
+              onAsciiCharSetChange={(charSet) => {
+                setAsciiCharSet(charSet);
+                setGeneratedSVG(null);
+              }}
+              onAsciiReset={handleAsciiReset}
               onDitheringGradientChange={(gradient) => {
                 setDitheringGradient(gradient);
                 setGeneratedSVG(null); // Clear SVG when gradient changes
@@ -1330,6 +1706,7 @@ function App() {
                 setDitheringMethod(method);
                 setGeneratedSVG(null); // Clear SVG when method changes
               }}
+              onDitheringReset={handleDitheringReset}
               exportMode={exportMode}
               onExportModeChange={(mode) => {
                 setExportMode(mode);
@@ -1538,6 +1915,11 @@ function App() {
         onDitheringChange={(enabled) => {
           setApplyDithering(enabled);
           setGeneratedSVG(null); // Clear SVG when dithering changes
+          setGeneratedPNG(null); // Clear PNG when dithering changes
+          if (!enabled) {
+            // When dithering is removed, clear processed preview to trigger regeneration
+            setProcessedPreviewUrl(null);
+          }
         }}
         ditheringResolution={ditheringResolution}
         onDitheringResolutionChange={(resolution) => {
@@ -1559,17 +1941,40 @@ function App() {
           setDitheringBrightness(brightness);
           setGeneratedSVG(null); // Clear SVG when brightness changes
         }}
-        ditheringColorCount={ditheringColorCount}
-        onDitheringColorCountChange={(count) => {
-          setDitheringColorCount(count);
-          setGeneratedSVG(null); // Clear SVG when color count changes
+        ditheringGradient={ditheringGradient}
+        applyColorPalette={applyColorPalette}
+        onColorPaletteChange={(enabled) => {
+          setApplyColorPalette(enabled);
+          setGeneratedSVG(null); // Clear SVG when color palette changes
         }}
-        ditheringColorPalette={ditheringColorPalette}
-        onDitheringColorPaletteChange={(palette) => {
-          setDitheringColorPalette(palette);
+        colorPalette={colorPalette}
+        onColorPaletteValueChange={(palette) => {
+          setColorPalette(palette);
           setGeneratedSVG(null); // Clear SVG when palette changes
         }}
-        ditheringGradient={ditheringGradient}
+        colorPaletteCount={colorPaletteCount}
+        onColorPaletteCountChange={(count) => {
+          setColorPaletteCount(count);
+          setGeneratedSVG(null); // Clear SVG when color count changes
+        }}
+        onColorPaletteReset={handleColorPaletteReset}
+        applyAscii={applyAscii}
+        onAsciiChange={(enabled) => {
+          setApplyAscii(enabled);
+          setGeneratedSVG(null);
+          setGeneratedPNG(null);
+        }}
+        asciiCellSize={asciiCellSize}
+        onAsciiCellSizeChange={(size) => {
+          setAsciiCellSize(size);
+          setGeneratedSVG(null);
+        }}
+        asciiCharSet={asciiCharSet}
+        onAsciiCharSetChange={(charSet) => {
+          setAsciiCharSet(charSet);
+          setGeneratedSVG(null);
+        }}
+        onAsciiReset={handleAsciiReset}
         onDitheringGradientChange={(gradient) => {
           setDitheringGradient(gradient);
           setGeneratedSVG(null); // Clear SVG when gradient changes
@@ -1579,6 +1984,7 @@ function App() {
           setDitheringMethod(method);
           setGeneratedSVG(null); // Clear SVG when method changes
         }}
+        onDitheringReset={handleDitheringReset}
               exportMode={exportMode}
               onExportModeChange={(mode) => {
                 setExportMode(mode);
