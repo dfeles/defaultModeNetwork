@@ -363,10 +363,6 @@ function App() {
   };
 
   const handleImageLoaded = (data) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:365',message:'handleImageLoaded entry',data:{hasImagePreviewUrl:!!imagePreviewUrl,hasProcessedPreviewUrl:!!processedPreviewUrl,imagePreviewUrlSize:imagePreviewUrl?.length||0,processedPreviewUrlSize:processedPreviewUrl?.length||0,hasImageData:!!imageData,hasTexture:!!imageData?.texture},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
-    
     // Clean up previous preview URLs to free memory
     if (imagePreviewUrl && imagePreviewUrl.startsWith('data:')) {
       // Data URLs can't be revoked, but we can clear the reference
@@ -409,17 +405,11 @@ function App() {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(data.texture.image, 0, 0);
       const previewUrl = canvas.toDataURL('image/jpeg', 0.85); // Use JPEG with compression to reduce memory
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:407',message:'Canvas created for preview',data:{canvasWidth:canvas.width,canvasHeight:canvas.height,previewUrlSize:previewUrl.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       setImagePreviewUrl(previewUrl);
       
       // Clean up canvas after use
       canvas.width = 0;
       canvas.height = 0;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:413',message:'Canvas cleaned up',data:{canvasWidth:canvas.width,canvasHeight:canvas.height},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
     }
   };
 
@@ -560,9 +550,6 @@ function App() {
           processCanvas = document.createElement('canvas');
           processCanvas.width = processWidth;
           processCanvas.height = processHeight;
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:550',message:'Process canvas created',data:{processWidth,processHeight},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
           const processCtx = processCanvas.getContext('2d');
           
           // Draw the image to the processing canvas (downsampled if dithering)
@@ -573,6 +560,7 @@ function App() {
           let ditheredData = null;
           if (currentApplyDithering) {
             imageDataObj = processCtx.getImageData(0, 0, processWidth, processHeight);
+            
             const ditherFunction = currentDitheringMethod === 'ordered' ? applyOrderedDithering : applyFloydSteinbergDithering;
             ditheredData = ditherFunction(
               imageDataObj, 
@@ -583,6 +571,7 @@ function App() {
               currentDitheringColorCount > 2 ? currentDitheringColorPalette : null,
               currentDitheringGradient
             );
+            
             processCtx.putImageData(ditheredData, 0, 0);
           }
           
@@ -599,9 +588,6 @@ function App() {
           displayCanvas = document.createElement('canvas');
           displayCanvas.width = currentImageData.width;
           displayCanvas.height = currentImageData.height;
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/3cf17700-e8a6-4b31-8b07-baba98c57796',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.js:586',message:'Display canvas created',data:{displayWidth:displayCanvas.width,displayHeight:displayCanvas.height},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
           const displayCtx = displayCanvas.getContext('2d');
           
           // Scale the processed image back up to original size for display
@@ -622,6 +608,7 @@ function App() {
           
           // Convert to data URL for preview (use JPEG with compression to reduce memory)
           const previewUrl = displayCanvas.toDataURL('image/jpeg', 0.85);
+          
           setProcessedPreviewUrl(previewUrl);
           
           // Clean up canvases immediately after use
