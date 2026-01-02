@@ -66,6 +66,12 @@ module.exports = {
         }
       }
       
+      // Suppress source map warnings for third-party packages
+      webpackConfig.ignoreWarnings = [
+        /Failed to parse source map/,
+        /ENOENT: no such file or directory/
+      ];
+      
       return webpackConfig;
     },
   },

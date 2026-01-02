@@ -1,6 +1,8 @@
 {
   "buildCommand": "pnpm run build",
   "outputDirectory": "build",
-  "installCommand": "pnpm install"
+  "installCommand": "pnpm install",
+  "cleanUrls": false,
+  "trailingSlash": false
 }
 
