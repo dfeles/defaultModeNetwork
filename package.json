@@ -21,11 +21,12 @@
   "scripts": {
     "start": "craco start",
     "start:gameoflife": "APP_NAME=gameoflife PORT=3001 craco start",
+    "start:both": "concurrently \"pnpm run start\" \"pnpm run start:gameoflife\"",
     "build": "pnpm run build:both && pnpm run copy-index",
     "build:both": "pnpm run build:app && pnpm run build:gameoflife:merge",
     "build:app": "APP_NAME=app craco build",
     "build:gameoflife": "APP_NAME=gameoflife craco build",
-    "build:gameoflife:merge": "rm -rf build-gameoflife && APP_NAME=gameoflife OUTPUT_DIR=build-gameoflife craco build && cp build-gameoflife/game-of-life.html build/ && cp -r build-gameoflife/static/* build/static/ 2>/dev/null || true && rm -rf build-gameoflife",
+    "build:gameoflife:merge": "rm -rf build-gameoflife && APP_NAME=gameoflife OUTPUT_DIR=build-gameoflife craco build && test -f build-gameoflife/game-of-life.html && cp build-gameoflife/game-of-life.html build/ && mkdir -p build/static && test -d build-gameoflife/static && cp -r build-gameoflife/static/* build/static/ && rm -rf build-gameoflife",
     "copy-index": "cp public/index.html build/index.html",
     "test": "craco test",
     "eject": "react-scripts eject"
@@ -43,6 +44,7 @@
     ]
   },
   "devDependencies": {
+    "concurrently": "^8.2.2",
     "http-proxy-middleware": "^3.0.5"
   }
 }

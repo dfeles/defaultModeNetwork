@@ -3,6 +3,24 @@
   "outputDirectory": "build",
   "installCommand": "pnpm install",
   "cleanUrls": false,
-  "trailingSlash": false
+  "trailingSlash": false,
+  "routes": [
+    {
+      "src": "/app.html",
+      "dest": "/app.html"
+    },
+    {
+      "src": "/game-of-life.html",
+      "dest": "/game-of-life.html"
+    },
+    {
+      "src": "/static/(.*)",
+      "dest": "/static/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
 }
 
