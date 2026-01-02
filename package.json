@@ -24,9 +24,9 @@
     "start:both": "concurrently \"pnpm run start\" \"pnpm run start:gameoflife\"",
     "build": "pnpm run build:both && pnpm run copy-index",
     "build:both": "pnpm run build:app && pnpm run build:gameoflife:merge",
-    "build:app": "APP_NAME=app craco build",
+    "build:app": "APP_NAME=app craco build && test -f build/app.html || (echo 'Error: app.html not created' && exit 1)",
     "build:gameoflife": "APP_NAME=gameoflife craco build",
-    "build:gameoflife:merge": "rm -rf build-gameoflife && APP_NAME=gameoflife OUTPUT_DIR=build-gameoflife craco build 2>&1 | grep -v 'ENOENT' || true && if [ -f build-gameoflife/game-of-life.html ]; then cp build-gameoflife/game-of-life.html build/; fi && mkdir -p build/static && if [ -d build-gameoflife/static ]; then cp -r build-gameoflife/static/* build/static/ 2>/dev/null || true; fi && rm -rf build-gameoflife",
+    "build:gameoflife:merge": "rm -rf build-gameoflife && APP_NAME=gameoflife OUTPUT_DIR=build-gameoflife craco build 2>&1 | grep -v 'ENOENT' || true && if [ -f build-gameoflife/game-of-life.html ]; then cp build-gameoflife/game-of-life.html build/; else echo 'Warning: game-of-life.html not found'; fi && mkdir -p build/static && if [ -d build-gameoflife/static ]; then cp -r build-gameoflife/static/* build/static/ 2>/dev/null || true; fi && rm -rf build-gameoflife",
     "copy-index": "cp public/index.html build/index.html",
     "test": "craco test",
     "eject": "react-scripts eject"

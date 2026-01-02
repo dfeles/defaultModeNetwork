@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, Pause, RotateCcw, SkipForward, RotateCcw as RotateCcwIcon } from 'lucide-react';
 import { applyFloydSteinbergDithering, applyOrderedDithering } from '../utils/dithering';
+import * as THREE from 'three';
+import GameOfLifeMaterial from './shaders/GameOfLifeMaterial';
 import './GameOfLife.css';
 
 // Cellular automata rules
@@ -306,6 +308,12 @@ function GameOfLife({
   const [speed, setSpeed] = useState(300); // milliseconds per generation
   const intervalRef = useRef(null);
   const canvasRef = useRef(null);
+  const rendererRef = useRef(null); // WebGL renderer
+  const sceneRef = useRef(null); // Three.js scene
+  const cameraRef = useRef(null); // Three.js camera
+  const meshRef = useRef(null); // Three.js mesh
+  const materialRef = useRef(null); // Shader material
+  const textureRef = useRef(null); // Grid texture
   const gridRef = useRef(grid); // Keep ref in sync with grid state
   const isUpdatingRef = useRef(false); // Prevent overlapping updates
   const intervalIdRef = useRef(null); // Track the actual interval ID to prevent duplicates
@@ -576,14 +584,88 @@ function GameOfLife({
     }
   }, [imageData, cellSize, useDithering, ditheringMethod, ditheringThreshold, setGrid, setGeneration, setIsRunning, isEnabled, simulationType]);
 
-  // Draw grid to canvas
+  // Convert grid to texture data
+  const gridToTextureData = useCallback((gridData) => {
+    if (!gridData) return null;
+    
+    const width = gridData[0].length;
+    const height = gridData.length;
+    const data = new Uint8Array(width * height * 4);
+    
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const value = gridData[y][x];
+        const idx = (y * width + x) * 4;
+        // Handle both binary (0/1) and continuous (0-1) values
+        const intensity = value === 1 ? 255 : Math.floor(value * 255);
+        data[idx] = intensity;     // R
+        data[idx + 1] = intensity; // G
+        data[idx + 2] = intensity; // B
+        data[idx + 3] = 255;       // A
+      }
+    }
+    
+    return { data, width, height };
+  }, []);
+
+  // Draw grid using WebGL
   const drawGrid = useCallback(() => {
     if (!canvasRef.current || !grid) return;
     
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
     const width = grid[0].length;
     const height = grid.length;
+    
+    // Initialize WebGL renderer if needed
+    if (!rendererRef.current) {
+      rendererRef.current = new THREE.WebGLRenderer({ 
+        canvas: canvas,
+        antialias: false,
+        preserveDrawingBuffer: true
+      });
+      rendererRef.current.setPixelRatio(1);
+      
+      // Create scene
+      sceneRef.current = new THREE.Scene();
+      cameraRef.current = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+      
+      // Create material
+      materialRef.current = new GameOfLifeMaterial();
+      
+      // Create geometry and mesh
+      const geometry = new THREE.PlaneGeometry(2, 2);
+      meshRef.current = new THREE.Mesh(geometry, materialRef.current);
+      sceneRef.current.add(meshRef.current);
+    }
+    
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    const material = materialRef.current;
+    
+    // Convert grid to texture data
+    const textureData = gridToTextureData(grid);
+    if (!textureData) return;
+    
+    // Dispose old texture
+    if (textureRef.current) {
+      textureRef.current.dispose();
+    }
+    
+    // Create new texture with current grid data
+    textureRef.current = new THREE.DataTexture(
+      textureData.data,
+      textureData.width,
+      textureData.height,
+      THREE.RGBAFormat
+    );
+    textureRef.current.flipY = false;
+    textureRef.current.needsUpdate = true;
+    material.uniforms.tGrid.value = textureRef.current;
+    
+    // Update uniforms
+    material.uniforms.uGridSize.value.set(width, height);
+    material.uniforms.uCellSize.value = cellSize;
     
     if (displayMode === 'main') {
       // In main mode, scale canvas to fit container while maintaining aspect ratio
@@ -609,76 +691,65 @@ function GameOfLife({
         canvas.style.width = `${displayWidth}px`;
         canvas.style.height = `${displayHeight}px`;
         
-        // Set canvas internal size (for rendering) - use actual pixel size
-        canvas.width = displayWidth;
-        canvas.height = displayHeight;
-        
-        // Calculate scale factor
-        const scaleX = displayWidth / (width * cellSize);
-        const scaleY = displayHeight / (height * cellSize);
-        
-        // Clear canvas
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // Draw cells with scaling
-        for (let y = 0; y < height; y++) {
-          for (let x = 0; x < width; x++) {
-            const value = grid[y][x];
-            if (value > 0) {
-              // Handle both binary (0/1) and continuous (0-1) values
-              const intensity = value === 1 ? 255 : Math.floor(value * 255);
-              ctx.fillStyle = `rgb(${intensity}, ${intensity}, ${intensity})`;
-              ctx.fillRect(
-                x * cellSize * scaleX,
-                y * cellSize * scaleY,
-                cellSize * scaleX,
-                cellSize * scaleY
-              );
-            }
-          }
-        }
-        return;
+        // Set renderer size
+        renderer.setSize(displayWidth, displayHeight);
+        material.uniforms.uResolution.value.set(displayWidth, displayHeight);
       }
+    } else {
+      // Sidebar mode - original sizing
+      const canvasWidth = width * cellSize;
+      const canvasHeight = height * cellSize;
+      canvas.style.width = '';
+      canvas.style.height = '';
+      renderer.setSize(canvasWidth, canvasHeight);
+      material.uniforms.uResolution.value.set(canvasWidth, canvasHeight);
     }
     
-    // Sidebar mode or fallback - original sizing
-    canvas.width = width * cellSize;
-    canvas.height = height * cellSize;
-    canvas.style.width = '';
-    canvas.style.height = '';
-    
-    // Clear canvas
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw cells - handle both binary and continuous values
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const value = grid[y][x];
-        if (value > 0) {
-          // Handle both binary (0/1) and continuous (0-1) values
-          const intensity = value === 1 ? 255 : Math.floor(value * 255);
-          ctx.fillStyle = `rgb(${intensity}, ${intensity}, ${intensity})`;
-          ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-        }
-      }
-    }
-  }, [grid, cellSize, displayMode]);
+    // Render
+    renderer.render(scene, camera);
+  }, [grid, cellSize, displayMode, gridToTextureData]);
 
-  // Update canvas when grid changes or window resizes (for main mode only)
+  // Update canvas when grid changes or window resizes
   useEffect(() => {
-    if (displayMode === 'main' && grid) {
+    if (grid) {
       // Draw immediately to ensure each generation is visible
       drawGrid();
       
-      const handleResize = () => {
-        drawGrid();
-      };
-      window.addEventListener('resize', handleResize);
-      return () => window.removeEventListener('resize', handleResize);
+      if (displayMode === 'main') {
+        const handleResize = () => {
+          drawGrid();
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+      }
     }
   }, [drawGrid, displayMode, grid]);
+
+  // Cleanup WebGL resources on unmount
+  useEffect(() => {
+    return () => {
+      if (textureRef.current) {
+        textureRef.current.dispose();
+        textureRef.current = null;
+      }
+      if (materialRef.current) {
+        materialRef.current.dispose();
+        materialRef.current = null;
+      }
+      if (meshRef.current) {
+        if (meshRef.current.geometry) {
+          meshRef.current.geometry.dispose();
+        }
+        meshRef.current = null;
+      }
+      if (rendererRef.current) {
+        rendererRef.current.dispose();
+        rendererRef.current = null;
+      }
+      sceneRef.current = null;
+      cameraRef.current = null;
+    };
+  }, []);
 
   // Game loop
   useEffect(() => {
