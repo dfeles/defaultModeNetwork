@@ -3,14 +3,34 @@ const path = require('path');
 module.exports = {
   webpack: {
     configure: (webpackConfig) => {
-      // Find the HtmlWebpackPlugin and update it to use app.html
+      const appName = process.env.APP_NAME || 'app';
+      const outputDir = process.env.OUTPUT_DIR || 'build';
+      
+      // Set output path if custom directory specified
+      if (outputDir !== 'build') {
+        webpackConfig.output.path = path.resolve(__dirname, outputDir);
+      }
+      
+      // Update entry point based on app name
+      if (appName === 'gameoflife') {
+        webpackConfig.entry = path.resolve(__dirname, 'src/index-gameOfLife.js');
+      } else {
+        webpackConfig.entry = path.resolve(__dirname, 'src/index.js');
+      }
+      
+      // Find the HtmlWebpackPlugin and update it based on app name
       const HtmlWebpackPlugin = webpackConfig.plugins.find(
         plugin => plugin.constructor && plugin.constructor.name === 'HtmlWebpackPlugin'
       );
       
       if (HtmlWebpackPlugin) {
-        HtmlWebpackPlugin.options.template = path.resolve(__dirname, 'public/app.html');
-        HtmlWebpackPlugin.options.filename = 'app.html';
+        if (appName === 'gameoflife') {
+          HtmlWebpackPlugin.options.template = path.resolve(__dirname, 'public/game-of-life.html');
+          HtmlWebpackPlugin.options.filename = process.env.NODE_ENV === 'production' ? 'game-of-life.html' : 'index.html';
+        } else {
+          HtmlWebpackPlugin.options.template = path.resolve(__dirname, 'public/app.html');
+          HtmlWebpackPlugin.options.filename = process.env.NODE_ENV === 'production' ? 'app.html' : 'index.html';
+        }
       }
 
       // Include mindone package from node_modules for JSX transpilation

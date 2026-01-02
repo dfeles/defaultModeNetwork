@@ -20,7 +20,12 @@
   },
   "scripts": {
     "start": "craco start",
-    "build": "craco build && pnpm run copy-index",
+    "start:gameoflife": "APP_NAME=gameoflife PORT=3001 craco start",
+    "build": "pnpm run build:both && pnpm run copy-index",
+    "build:both": "pnpm run build:app && pnpm run build:gameoflife:merge",
+    "build:app": "APP_NAME=app craco build",
+    "build:gameoflife": "APP_NAME=gameoflife craco build",
+    "build:gameoflife:merge": "rm -rf build-gameoflife && APP_NAME=gameoflife OUTPUT_DIR=build-gameoflife craco build && cp build-gameoflife/game-of-life.html build/ && cp -r build-gameoflife/static/* build/static/ 2>/dev/null || true && rm -rf build-gameoflife",
     "copy-index": "cp public/index.html build/index.html",
     "test": "craco test",
     "eject": "react-scripts eject"
