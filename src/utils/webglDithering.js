@@ -44,9 +44,17 @@ export async function applyWebGLDithering(image, options = {}) {
     brightness = 0,
     colorCount = 2,
     colorPalette = null,
-    gradient = 50,
+    levelsBlack,
+    levelsWhite,
+    levelsGamma,
+    gradient, // legacy 0-100 (50 = linear); converted to levels if levels* not provided
     method = 'floyd-steinberg' // 'floyd-steinberg' or 'ordered'
   } = options;
+
+  // Support legacy gradient (0-100): 50 = linear → gamma 1; 0 → 0.25; 100 → 4
+  const _levelsBlack = levelsBlack !== undefined ? levelsBlack : 0;
+  const _levelsWhite = levelsWhite !== undefined ? levelsWhite : 255;
+  const _levelsGamma = levelsGamma !== undefined ? levelsGamma : (gradient !== undefined ? 0.25 + (gradient / 100) * 3.75 : 1);
 
   // Error diffusion algorithms require sequential processing and are hard to parallelize accurately
   // Use CPU-based implementation for all error diffusion methods, GPU for Ordered
@@ -139,7 +147,9 @@ export async function applyWebGLDithering(image, options = {}) {
       contrast,
       brightness,
       colorCount > 2 ? colorPalette : null,
-      gradient
+      _levelsBlack,
+      _levelsWhite,
+      _levelsGamma
     );
     
     return dithered;
@@ -219,7 +229,13 @@ export async function applyWebGLDithering(image, options = {}) {
         material.uniforms.uContrast.value = contrast;
         material.uniforms.uBrightness.value = brightness;
         material.uniforms.uColorCount.value = colorCount;
-        material.uniforms.uGradient.value = gradient;
+        // Levels: pass gamma as legacy uGradient (50 = linear; 0 = darken, 100 = brighten)
+        material.uniforms.uGradient.value = _levelsGamma <= 1 ? 50 * _levelsGamma : 50 + (_levelsGamma - 1) * 50;
+        if (material.uniforms.uLevelsBlack !== undefined) {
+          material.uniforms.uLevelsBlack.value = _levelsBlack;
+          material.uniforms.uLevelsWhite.value = _levelsWhite;
+          material.uniforms.uLevelsGamma.value = _levelsGamma;
+        }
         material.uniforms.uMethod.value = method === 'ordered' ? 1 : 0;
         material.uniforms.uPass.value = 0;
 

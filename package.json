@@ -9,6 +9,7 @@
     "@react-three/fiber": "^8.15.11",
     "d3-selection": "^3.0.0",
     "d3-zoom": "^3.0.0",
+    "heic2any": "^0.0.4",
     "lucide-react": "^0.555.0",
     "mindone": "^1.0.9",
     "react": "^18.2.0",
@@ -19,15 +20,8 @@
     "three": "^0.160.0"
   },
   "scripts": {
-    "start": "craco start",
-    "start:gameoflife": "APP_NAME=gameoflife PORT=3001 craco start",
-    "start:both": "concurrently \"pnpm run start\" \"pnpm run start:gameoflife\"",
-    "build": "pnpm run build:both && pnpm run copy-index",
-    "build:both": "echo 'Building STL2SVG app...' && pnpm run build:app && echo 'STL2SVG app built. Files:' && ls -la build/*.html 2>/dev/null || echo 'No HTML files found' && echo 'Building Game of Life app...' && pnpm run build:gameoflife:merge && echo 'All builds complete. Final files:' && ls -la build/*.html 2>/dev/null || echo 'No HTML files found'",
-    "build:app": "APP_NAME=app craco build",
-    "build:gameoflife": "APP_NAME=gameoflife craco build",
-    "build:gameoflife:merge": "rm -rf build-gameoflife && APP_NAME=gameoflife OUTPUT_DIR=build-gameoflife craco build 2>&1 | grep -v 'ENOENT' || true && if [ -f build-gameoflife/game-of-life.html ]; then cp build-gameoflife/game-of-life.html build/; else echo 'Warning: game-of-life.html not found'; fi && mkdir -p build/static && if [ -d build-gameoflife/static ]; then cp -r build-gameoflife/static/* build/static/ 2>/dev/null || true; fi && rm -rf build-gameoflife",
-    "copy-index": "cp public/index.html build/index.html",
+    "start": "APP_NAME=dither craco start",
+    "build": "APP_NAME=dither craco build",
     "test": "craco test",
     "eject": "react-scripts eject"
   },
@@ -44,7 +38,10 @@
     ]
   },
   "devDependencies": {
+    "autoprefixer": "^10.4.20",
     "concurrently": "^8.2.2",
-    "http-proxy-middleware": "^3.0.5"
+    "http-proxy-middleware": "^3.0.5",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17"
   }
 }

@@ -783,6 +783,7 @@ function App() {
                   : null;
                 const ditheringColorCount = ditheringPalette ? ditheringPalette.length : 2;
                 
+                const gammaFromGradient = 0.25 + (currentDitheringGradient / 100) * 3.75;
                 const ditheredData = ditherFunction(
                   imageDataObj, 
                   ditheringColorCount, 
@@ -790,7 +791,7 @@ function App() {
                   currentDitheringContrast, 
                   currentDitheringBrightness,
                   ditheringPalette,
-                  currentDitheringGradient
+                  0, 255, gammaFromGradient
                 );
                 processCtx.putImageData(ditheredData, 0, 0);
                 
@@ -1381,6 +1382,7 @@ function App() {
                     : null;
                   const ditheringColorCount = ditheringPalette ? ditheringPalette.length : 2;
                   
+                  const gammaFromGradient = 0.25 + (ditheringGradient / 100) * 3.75;
                   const ditheredData = ditherFunction(
                     imageDataObj,
                     ditheringColorCount,
@@ -1388,7 +1390,7 @@ function App() {
                     ditheringContrast,
                     ditheringBrightness,
                     ditheringPalette,
-                    ditheringGradient
+                    0, 255, gammaFromGradient
                   );
                   processCtx.putImageData(ditheredData, 0, 0);
                   

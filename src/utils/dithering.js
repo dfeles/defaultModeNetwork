@@ -35,6 +35,43 @@ export function applyColorPalette(imageData, colorPalette) {
 }
 
 /**
+ * Force pixels to palette-only colors. Opaque pixels get alpha=255; pixels that were
+ * fully transparent in the source keep alpha=0 (no value, just transparency).
+ * @param {ImageData} imageData - The image data to process (e.g. dithered result)
+ * @param {Array<string>|null} colorPalette - Palette (default black & white if null/empty)
+ * @param {ImageData|null} originalImageData - If provided, same dimensions as imageData; pixels with original alpha 0 keep alpha 0
+ * @returns {ImageData} New ImageData: palette colors, alpha 255 for visible pixels, alpha 0 where source was fully transparent
+ */
+export function makeOpaquePaletteOnly(imageData, colorPalette = null, originalImageData = null) {
+  const palette = colorPalette && colorPalette.length > 0 ? colorPalette : ['#000000', '#ffffff'];
+  const data = imageData.data;
+  const width = imageData.width;
+  const height = imageData.height;
+  const output = new ImageData(new Uint8ClampedArray(data.length), width, height);
+  const outputData = output.data;
+  const orig = originalImageData && originalImageData.data.length === data.length ? originalImageData.data : null;
+
+  for (let i = 0; i < data.length; i += 4) {
+    if (orig && orig[i + 3] === 0) {
+      outputData[i] = 0;
+      outputData[i + 1] = 0;
+      outputData[i + 2] = 0;
+      outputData[i + 3] = 0;
+      continue;
+    }
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const [qr, qg, qb] = findClosestColor(r, g, b, palette);
+    outputData[i] = qr;
+    outputData[i + 1] = qg;
+    outputData[i + 2] = qb;
+    outputData[i + 3] = 255;
+  }
+  return output;
+}
+
+/**
  * Apply contrast adjustment to a pixel value
  * @param {number} value - Pixel value (0-255)
  * @param {number} contrast - Contrast adjustment (-100 to 100, where 0 is no change)
@@ -109,27 +146,52 @@ function findClosestColor(r, g, b, palette) {
 }
 
 /**
- * Apply gradient curve to brightness value
- * @param {number} brightness - Brightness value (0-255)
- * @param {number} gradient - Gradient control (0-100, 50 = linear, <50 = more black, >50 = more white)
- * @returns {number} Adjusted brightness (0-255)
+ * Apply only color adjustments (contrast, brightness, levels) to ImageData — no dithering.
+ * Use when dithering is turned off to preview/export the color-corrected image.
  */
-function applyGradientCurve(brightness, gradient) {
-  // Normalize gradient: 0 = all black early, 50 = linear, 100 = all white early
-  const normalized = (gradient - 50) / 50; // -1 to 1
-  
-  // Apply curve: negative = compress dark values, positive = compress light values
-  if (normalized < 0) {
-    // More black: compress dark values, expand light values
-    const factor = 1 + Math.abs(normalized);
-    return Math.pow(brightness / 255, 1 / factor) * 255;
-  } else if (normalized > 0) {
-    // More white: expand dark values, compress light values
-    const factor = 1 + normalized;
-    return Math.pow(brightness / 255, factor) * 255;
+export function applyColorAdjustments(imageData, contrast, brightness, levelsBlack, levelsWhite, levelsGamma) {
+  const data = imageData.data;
+  const width = imageData.width;
+  const height = imageData.height;
+  const output = new ImageData(new Uint8ClampedArray(data.length), width, height);
+  const out = output.data;
+  const levelsActive = levelsBlack !== 0 || levelsWhite !== 255 || levelsGamma !== 1;
+
+  for (let i = 0; i < data.length; i += 4) {
+    let r = applyBrightness(applyContrast(data[i], contrast), brightness);
+    let g = applyBrightness(applyContrast(data[i + 1], contrast), brightness);
+    let b = applyBrightness(applyContrast(data[i + 2], contrast), brightness);
+    if (levelsActive) {
+      const brightnessVal = 0.299 * r + 0.587 * g + 0.114 * b;
+      const adjusted = applyLevels(brightnessVal, levelsBlack, levelsWhite, levelsGamma);
+      const scale = adjusted / Math.max(brightnessVal, 0.001);
+      r = Math.min(255, Math.max(0, r * scale));
+      g = Math.min(255, Math.max(0, g * scale));
+      b = Math.min(255, Math.max(0, b * scale));
+    }
+    out[i] = r;
+    out[i + 1] = g;
+    out[i + 2] = b;
+    out[i + 3] = data[i + 3];
   }
-  // Linear (gradient = 50)
-  return brightness;
+  return output;
+}
+
+/**
+ * Apply levels curve (Photoshop-style) to a brightness value 0-255.
+ * @param {number} value - Input value (0-255)
+ * @param {number} inBlack - Input black point (0-255); values at or below map to 0
+ * @param {number} inWhite - Input white point (0-255); values at or above map to 255
+ * @param {number} gamma - Midtone curve (0.25-4); 1 = linear, <1 darken midtones, >1 brighten
+ * @returns {number} Adjusted value (0-255)
+ */
+function applyLevels(value, inBlack, inWhite, gamma) {
+  const span = inWhite - inBlack;
+  if (span <= 0) return value >= inWhite ? 255 : 0;
+  let t = (value - inBlack) / span;
+  t = Math.min(1, Math.max(0, t));
+  if (gamma !== 1) t = Math.pow(t, 1 / gamma);
+  return t * 255;
 }
 
 /**
@@ -141,9 +203,11 @@ function applyGradientCurve(brightness, gradient) {
  * @param {number} contrast - Contrast adjustment (-100 to 100, default: 0)
  * @param {number} brightness - Brightness adjustment (-100 to 100, default: 0)
  * @param {Array<string>} colorPalette - Array of hex color strings for palette quantization (optional)
- * @param {number} gradient - Gradient control (0-100, 50 = linear, <50 = more black early, >50 = more white early)
+ * @param {number} levelsBlack - Input black point 0-255 (default 0)
+ * @param {number} levelsWhite - Input white point 0-255 (default 255)
+ * @param {number} levelsGamma - Midtone gamma (default 1); <1 darken, >1 brighten
  */
-export function applyFloydSteinbergDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+export function applyFloydSteinbergDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   const data = imageData.data;
   const width = imageData.width;
   const height = imageData.height;
@@ -194,14 +258,11 @@ export function applyFloydSteinbergDithering(imageData, levels = 2, threshold = 
       let g = outputData[idx + 1];
       let b = outputData[idx + 2];
       
-      // Apply gradient curve to brightness before color matching
-      // This controls where black/white transitions occur
-      if (gradient !== 50 && palette && palette.length > 2) {
-        // Calculate brightness
+      // Apply levels curve to brightness before color matching (Photoshop-style)
+      const levelsActive = levelsBlack !== 0 || levelsWhite !== 255 || levelsGamma !== 1;
+      if (levelsActive) {
         const pixelBrightness = 0.299 * r + 0.587 * g + 0.114 * b;
-        // Apply gradient curve
-        const adjustedBrightness = applyGradientCurve(pixelBrightness, gradient);
-        // Scale RGB proportionally to match adjusted brightness
+        const adjustedBrightness = applyLevels(pixelBrightness, levelsBlack, levelsWhite, levelsGamma);
         const scale = adjustedBrightness / Math.max(pixelBrightness, 0.001);
         r = Math.min(255, Math.max(0, r * scale));
         g = Math.min(255, Math.max(0, g * scale));
@@ -269,9 +330,11 @@ export function applyFloydSteinbergDithering(imageData, levels = 2, threshold = 
  * @param {number} contrast - Contrast adjustment
  * @param {number} brightness - Brightness adjustment
  * @param {Array<string>} colorPalette - Color palette
- * @param {number} gradient - Gradient control
+ * @param {number} levelsBlack - Input black point 0-255
+ * @param {number} levelsWhite - Input white point 0-255
+ * @param {number} levelsGamma - Midtone gamma
  */
-function applyErrorDiffusion(imageData, errorMatrix, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+function applyErrorDiffusion(imageData, errorMatrix, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   const data = imageData.data;
   const width = imageData.width;
   const height = imageData.height;
@@ -313,10 +376,11 @@ function applyErrorDiffusion(imageData, errorMatrix, levels = 2, threshold = 128
       let g = outputData[idx + 1];
       let b = outputData[idx + 2];
       
-      // Apply gradient curve
-      if (gradient !== 50 && palette && palette.length > 2) {
+      // Apply levels curve
+      const levelsActive = levelsBlack !== 0 || levelsWhite !== 255 || levelsGamma !== 1;
+      if (levelsActive) {
         const pixelBrightness = 0.299 * r + 0.587 * g + 0.114 * b;
-        const adjustedBrightness = applyGradientCurve(pixelBrightness, gradient);
+        const adjustedBrightness = applyLevels(pixelBrightness, levelsBlack, levelsWhite, levelsGamma);
         const scale = adjustedBrightness / Math.max(pixelBrightness, 0.001);
         r = Math.min(255, Math.max(0, r * scale));
         g = Math.min(255, Math.max(0, g * scale));
@@ -356,8 +420,7 @@ function applyErrorDiffusion(imageData, errorMatrix, levels = 2, threshold = 128
 /**
  * Apply Atkinson dithering
  */
-export function applyAtkinsonDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
-  // Atkinson error distribution matrix (1/8 weight for each)
+export function applyAtkinsonDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   const atkinsonMatrix = [
     [1, 0, 1/8],
     [2, 0, 1/8],
@@ -366,82 +429,82 @@ export function applyAtkinsonDithering(imageData, levels = 2, threshold = 128, c
     [1, 1, 1/8],
     [0, 2, 1/8]
   ];
-  return applyErrorDiffusion(imageData, atkinsonMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+  return applyErrorDiffusion(imageData, atkinsonMatrix, levels, threshold, contrast, brightness, colorPalette, levelsBlack, levelsWhite, levelsGamma);
 }
 
 /**
  * Apply Jarvis-Judice-Ninke dithering
  */
-export function applyJarvisJudiceNinkeDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+export function applyJarvisJudiceNinkeDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   // Jarvis-Judice-Ninke error distribution matrix (48 total weight)
   const jjnMatrix = [
     [1, 0, 7/48], [2, 0, 5/48],
     [-2, 1, 3/48], [-1, 1, 5/48], [0, 1, 7/48], [1, 1, 5/48], [2, 1, 3/48],
     [-2, 2, 1/48], [-1, 2, 3/48], [0, 2, 5/48], [1, 2, 3/48], [2, 2, 1/48]
   ];
-  return applyErrorDiffusion(imageData, jjnMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+  return applyErrorDiffusion(imageData, jjnMatrix, levels, threshold, contrast, brightness, colorPalette, levelsBlack, levelsWhite, levelsGamma);
 }
 
 /**
  * Apply Stucki dithering
  */
-export function applyStuckiDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+export function applyStuckiDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   // Stucki error distribution matrix (42 total weight)
   const stuckiMatrix = [
     [1, 0, 8/42], [2, 0, 4/42],
     [-2, 1, 2/42], [-1, 1, 4/42], [0, 1, 8/42], [1, 1, 4/42], [2, 1, 2/42],
     [-2, 2, 1/42], [-1, 2, 2/42], [0, 2, 4/42], [1, 2, 2/42], [2, 2, 1/42]
   ];
-  return applyErrorDiffusion(imageData, stuckiMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+  return applyErrorDiffusion(imageData, stuckiMatrix, levels, threshold, contrast, brightness, colorPalette, levelsBlack, levelsWhite, levelsGamma);
 }
 
 /**
  * Apply Burkes dithering
  */
-export function applyBurkesDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+export function applyBurkesDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   // Burkes error distribution matrix (32 total weight)
   const burkesMatrix = [
     [1, 0, 8/32], [2, 0, 4/32],
     [-2, 1, 2/32], [-1, 1, 4/32], [0, 1, 8/32], [1, 1, 4/32], [2, 1, 2/32]
   ];
-  return applyErrorDiffusion(imageData, burkesMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+  return applyErrorDiffusion(imageData, burkesMatrix, levels, threshold, contrast, brightness, colorPalette, levelsBlack, levelsWhite, levelsGamma);
 }
 
 /**
  * Apply Sierra dithering
  */
-export function applySierraDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+export function applySierraDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   // Sierra error distribution matrix (32 total weight)
   const sierraMatrix = [
     [1, 0, 5/32], [2, 0, 3/32],
     [-2, 1, 2/32], [-1, 1, 4/32], [0, 1, 5/32], [1, 1, 4/32], [2, 1, 2/32],
     [-1, 2, 2/32], [0, 2, 3/32], [1, 2, 2/32]
   ];
-  return applyErrorDiffusion(imageData, sierraMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+  return applyErrorDiffusion(imageData, sierraMatrix, levels, threshold, contrast, brightness, colorPalette, levelsBlack, levelsWhite, levelsGamma);
 }
 
 /**
  * Apply Sierra Lite dithering
  */
-export function applySierraLiteDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+export function applySierraLiteDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   // Sierra Lite error distribution matrix (4 total weight)
   const sierraLiteMatrix = [
     [1, 0, 2/4],
     [-1, 1, 1/4], [0, 1, 1/4]
   ];
-  return applyErrorDiffusion(imageData, sierraLiteMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+  return applyErrorDiffusion(imageData, sierraLiteMatrix, levels, threshold, contrast, brightness, colorPalette, levelsBlack, levelsWhite, levelsGamma);
 }
 
 /**
  * Apply Two-Row Sierra dithering
  */
-export function applyTwoRowSierraDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+export function applyTwoRowSierraDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   // Two-Row Sierra error distribution matrix (16 total weight)
   const twoRowSierraMatrix = [
     [1, 0, 4/16], [2, 0, 3/16],
     [-2, 1, 1/16], [-1, 1, 2/16], [0, 1, 3/16], [1, 1, 2/16], [2, 1, 1/16]
   ];
-  return applyErrorDiffusion(imageData, twoRowSierraMatrix, levels, threshold, contrast, brightness, colorPalette, gradient);
+  return applyErrorDiffusion(imageData, twoRowSierraMatrix, levels, threshold, contrast, brightness, colorPalette, levelsBlack, levelsWhite, levelsGamma);
 }
 
 /**
@@ -453,9 +516,11 @@ export function applyTwoRowSierraDithering(imageData, levels = 2, threshold = 12
  * @param {number} contrast - Contrast adjustment (-100 to 100, default: 0)
  * @param {number} brightness - Brightness adjustment (-100 to 100, default: 0)
  * @param {Array<string>} colorPalette - Array of hex color strings for palette quantization (optional)
- * @param {number} gradient - Gradient control (0-100, 50 = linear, <50 = more black early, >50 = more white early)
+ * @param {number} levelsBlack - Input black point 0-255 (default 0)
+ * @param {number} levelsWhite - Input white point 0-255 (default 255)
+ * @param {number} levelsGamma - Midtone gamma (default 1)
  */
-export function applyOrderedDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, gradient = 50) {
+export function applyOrderedDithering(imageData, levels = 2, threshold = 128, contrast = 0, brightness = 0, colorPalette = null, levelsBlack = 0, levelsWhite = 255, levelsGamma = 1) {
   const data = imageData.data;
   const width = imageData.width;
   const height = imageData.height;
@@ -512,13 +577,11 @@ export function applyOrderedDithering(imageData, levels = 2, threshold = 128, co
       let g = outputData[idx + 1];
       let b = outputData[idx + 2];
       
-      // Apply gradient curve to brightness before color matching
-      if (gradient !== 50 && palette && palette.length > 2) {
-        // Calculate brightness
+      // Apply levels curve to brightness before color matching
+      const levelsActive = levelsBlack !== 0 || levelsWhite !== 255 || levelsGamma !== 1;
+      if (levelsActive) {
         const pixelBrightness = 0.299 * r + 0.587 * g + 0.114 * b;
-        // Apply gradient curve
-        const adjustedBrightness = applyGradientCurve(pixelBrightness, gradient);
-        // Scale RGB proportionally to match adjusted brightness
+        const adjustedBrightness = applyLevels(pixelBrightness, levelsBlack, levelsWhite, levelsGamma);
         const scale = adjustedBrightness / Math.max(pixelBrightness, 0.001);
         r = Math.min(255, Math.max(0, r * scale));
         g = Math.min(255, Math.max(0, g * scale));

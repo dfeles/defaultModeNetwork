@@ -9,7 +9,8 @@ import {
   applySierraDithering,
   applySierraLiteDithering,
   applyTwoRowSierraDithering,
-  applyColorPalette as applyColorPaletteQuantization
+  applyColorPalette as applyColorPaletteQuantization,
+  makeOpaquePaletteOnly
 } from './dithering';
 import { ditherImageData, applyWebGLColorPalette, applyWebGLAscii } from './webglDithering';
 import { ASCII_PRESETS } from '../components/shaders/AsciiMaterial';
@@ -1786,30 +1787,45 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
     ditheringContrast = 0,
     ditheringBrightness = 0,
     ditheringColorCount = 2,
-    ditheringGradient = 50, // Gradient control (0-100)
+    ditheringLevelsBlack = 0,
+    ditheringLevelsWhite = 255,
+    ditheringLevelsGamma = 1,
     ditheringMethod = 'floyd-steinberg', // 'floyd-steinberg' or 'ordered'
     exportMode = 'optimized', // 'optimized' or 'simple'
-    pixelFilter = 'both', // 'white', 'black', or 'both'
     renderBackground = true, // Whether to render background rectangle
+    exportWhiteOnly = false, // When true (dark canvas), only export white/light pixels
     strokeColor = null, // Stroke color (null/undefined = no stroke, hex color string = stroke color)
-    strokeWidth = 0.5 // Stroke width in SVG units
+    strokeWidth = 0.5, // Stroke width in SVG units
+    pixelScale = 100, // Size of each pixel as % of cell (1-100), rest is padding
+    pixelShape = 'square', // 'square' or 'circle'
+    backgroundColor: compositeBgColor = '#0a0a0a' // Background to composite transparent pixels onto (app canvas bg)
   } = options;
 
-  // Create SVG header
-  // Determine background color - use canvas background color (#0a0a0a) to match the UI
-  // For ASCII, use dark background (#0a0a0a) or white if inverted
-  // For pixel-based rendering, use color based on pixel filter
-  const backgroundColor = applyAscii ? (asciiInvert ? '#ffffff' : '#0a0a0a') : 
-                         (pixelFilter === 'white' ? 'black' : 
-                          pixelFilter === 'black' ? 'white' : 'white');
-  
+  // SVG background = canvas background; we never include that color as pixels (always exclude it)
+  const backgroundColor = applyAscii ? (asciiInvert ? '#ffffff' : '#0a0a0a') : compositeBgColor;
+
+  // Parse background RGB for excluding background-colored pixels
+  const bgHex = (backgroundColor || compositeBgColor).replace('#', '');
+  const bgR = parseInt(bgHex.substr(0, 2), 16);
+  const bgG = parseInt(bgHex.substr(2, 2), 16);
+  const bgB = parseInt(bgHex.substr(4, 2), 16);
+  const BACKGROUND_TOLERANCE = 8; // Skip pixels within this distance of background color
+  const isBackgroundPixel = (r, g, b) =>
+    Math.abs(r - bgR) <= BACKGROUND_TOLERANCE &&
+    Math.abs(g - bgG) <= BACKGROUND_TOLERANCE &&
+    Math.abs(b - bgB) <= BACKGROUND_TOLERANCE;
+  // When exportWhiteOnly (dark canvas): only include pixels that are white/light
+  const LIGHT_THRESHOLD = 200;
+  const isWhitePixel = (r, g, b) => r >= LIGHT_THRESHOLD && g >= LIGHT_THRESHOLD && b >= LIGHT_THRESHOLD;
+
   let svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
 `;
   
-  // Only add background rectangle if renderBackground is true
+  // Only add background rectangle if renderBackground is true (always use random border color)
   if (renderBackground) {
-    svg += `  <rect width="${width}" height="${height}" fill="${backgroundColor}"/>\n`;
+    const randomBorderColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+    svg += `  <rect width="${width}" height="${height}" fill="${backgroundColor}" stroke="${randomBorderColor}" stroke-width="1"/>\n`;
   }
 
   if (!texture || !texture.image) {
@@ -1854,13 +1870,23 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
       }
     }
     
+    // Original alpha (before composite) so we can keep 0 alpha for fully transparent pixels
+    const origCanvas = document.createElement('canvas');
+    origCanvas.width = processWidth;
+    origCanvas.height = processHeight;
+    const origCtx = origCanvas.getContext('2d');
+    origCtx.drawImage(texture.image, 0, 0, processWidth, processHeight);
+    const originalImageData = origCtx.getImageData(0, 0, processWidth, processHeight);
+
     // Create a temporary canvas to render the texture
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = processWidth;
     tempCanvas.height = processHeight;
     const tempCtx = tempCanvas.getContext('2d');
     
-    // Draw the image to the canvas (downsampled if needed)
+    // Composite onto bg so transparent pixels have a color for dithering; we restore 0 alpha after
+    tempCtx.fillStyle = compositeBgColor;
+    tempCtx.fillRect(0, 0, processWidth, processHeight);
     tempCtx.drawImage(texture.image, 0, 0, processWidth, processHeight);
     
     // Get ImageData
@@ -1922,7 +1948,9 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
           brightness: ditheringBrightness,
           colorCount: ditheringColorCount,
           colorPalette: ditheringPalette,
-          gradient: ditheringGradient,
+          levelsBlack: ditheringLevelsBlack,
+          levelsWhite: ditheringLevelsWhite,
+          levelsGamma: ditheringLevelsGamma,
           method: ditheringMethod
         });
       } catch (error) {
@@ -1952,7 +1980,9 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
           ditheringContrast, 
           ditheringBrightness,
           ditheringPalette,
-          ditheringGradient
+          ditheringLevelsBlack,
+          ditheringLevelsWhite,
+          ditheringLevelsGamma
         );
       }
       
@@ -1960,6 +1990,10 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
       ditherCanvas.width = 0;
       ditherCanvas.height = 0;
     }
+    
+    // Palette only; keep alpha 0 where source had no value (fully transparent)
+    const exportPalette = (colorPalette && colorPalette.length > 0) ? colorPalette : ['#000000', '#ffffff'];
+    processedImageData = makeOpaquePaletteOnly(processedImageData, exportPalette, originalImageData);
     
     // If ASCII is enabled, render as text characters instead of pixels
     if (applyAscii) {
@@ -2099,28 +2133,18 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
       
       // Convert pixels to vector dots
       // Configuration - different for dithered vs non-dithered
-      let dotRadius, brightnessThreshold, minAlpha, maxDots, stepSize;
-      
-      // Pixel filter threshold (always use midpoint for filtering)
-      const pixelFilterThreshold = 128;
+      let dotRadius, minAlpha, maxDots, stepSize;
       
       if (applyDithering) {
         // For dithered images: MUST process every pixel to preserve the error-diffused pattern
-        // Dithering creates an organic pattern that will be lost with grid sampling
-        brightnessThreshold = 250; // Only skip pure white (255) for dithered
         minAlpha = 128;
-        maxDots = 1000000; // Higher limit since we need to capture the pattern
-        // CRITICAL: Always use stepSize = 1 for dithered images to preserve the pattern
-        // The dithering algorithm already created the optimal pattern, we just need to capture it
-        stepSize = 1; // Process every pixel - this is essential for dithered images
+        maxDots = 1000000;
+        stepSize = 1;
         console.log(`Dithered image: ${processWidth}x${processHeight}, processing every pixel (stepSize=1)`);
       } else {
-        // For non-dithered images: use sampling to reduce dots
         dotRadius = 0.6;
-        brightnessThreshold = 245; // Skip very light pixels for non-dithered
         minAlpha = 128;
         maxDots = 500000;
-        // Use step size to skip pixels for very large images
         stepSize = Math.max(1, Math.ceil(Math.sqrt((processWidth * processHeight) / maxDots)));
       }
       
@@ -2140,47 +2164,53 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
           
           // Skip transparent or very transparent pixels
           if (a < minAlpha) continue;
-          
-          // Calculate brightness
-          const brightness = (r + g + b) / 3;
-          
-          // Filter pixels based on pixelFilter mode
-          if (pixelFilter === 'black') {
-            // Only render dark pixels (black) - brightness below midpoint
-            if (brightness > pixelFilterThreshold) continue;
-          } else if (pixelFilter === 'white') {
-            // Only render light pixels (white) - brightness above midpoint
-            if (brightness <= pixelFilterThreshold) continue;
-          } else {
-            // 'both' - render all pixels (but still skip very light ones for non-dithered)
-            if (!applyDithering && brightness > brightnessThreshold) continue;
-          }
-          
+
+          // Always exclude canvas background color (black or white) — we don't draw it
+          if (isBackgroundPixel(r, g, b)) continue;
+
+          // When exportWhiteOnly (dark canvas): only export white/light pixels
+          if (exportWhiteOnly && !isWhitePixel(r, g, b)) continue;
+
           // Scale coordinates back to original size if downsampled
           const scaledX = x / scaleFactor;
           const scaledY = y / scaleFactor;
           const pixelSize = 1 / scaleFactor; // Size of each pixel in SVG coordinates
+          const scale = Math.min(1, Math.max(0.01, (pixelScale ?? 100) / 100));
+          const pad = (pixelSize * (1 - scale)) / 2;
+          const size = pixelSize * scale;
           
           if (applyDithering) {
-            // For dithered images: generate black rectangles for dark pixels
+            // For dithered images: generate shapes for dark pixels (square or circle, with optional padding)
             // Skip light pixels (they're the white background)
             const color = rgbToHex(r, g, b);
-            pixels.push({
-              x: scaledX,
-              y: scaledY,
-              width: pixelSize,
-              height: pixelSize,
-              color: color,
-              isRect: true
-            });
+            if (pixelShape === 'circle') {
+              pixels.push({
+                cx: scaledX + pixelSize / 2,
+                cy: scaledY + pixelSize / 2,
+                r: size / 2,
+                color: color,
+                isRect: false,
+                isCircle: true
+              });
+            } else {
+              pixels.push({
+                x: scaledX + pad,
+                y: scaledY + pad,
+                width: size,
+                height: size,
+                color: color,
+                isRect: true
+              });
+            }
           } else {
-            // For non-dithered images: use dots
+            // For non-dithered images: use dots (circles)
             const color = rgbToHex(r, g, b);
             pixels.push({
               x: scaledX + 0.5 / scaleFactor,
               y: scaledY + 0.5 / scaleFactor,
               color: color,
-              isRect: false
+              isRect: false,
+              isCircle: false
             });
           }
         }
@@ -2283,10 +2313,14 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
             }
           }
         } else {
-          // For non-dithered images: group circles by color
+          // Circles: dithered (with r) or non-dithered (use dotRadius)
           console.log(`Rendering ${dots.length} circles for color ${color}...`);
           dots.forEach(dot => {
-            svg += `    <circle cx="${dot.x.toFixed(1)}" cy="${dot.y.toFixed(1)}" r="${(dotRadius / scaleFactor).toFixed(2)}"/>\n`;
+            const cx = dot.cx != null ? dot.cx : dot.x;
+            const cy = dot.cy != null ? dot.cy : dot.y;
+            let r = dot.r != null ? dot.r : (dotRadius / scaleFactor);
+            if (hasStroke) r = Math.max(0, r - strokeWidth / 2);
+            svg += `    <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}"/>\n`;
           });
         }
         svg += `  </g>\n`;

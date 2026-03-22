@@ -3,7 +3,7 @@ const path = require('path');
 module.exports = {
   webpack: {
     configure: (webpackConfig) => {
-      const appName = process.env.APP_NAME || 'app';
+      const appName = process.env.APP_NAME || 'dither';
       const outputDir = process.env.OUTPUT_DIR || 'build';
       
       // Set output path if custom directory specified
@@ -12,7 +12,9 @@ module.exports = {
       }
       
       // Update entry point based on app name
-      if (appName === 'gameoflife') {
+      if (appName === 'dither') {
+        webpackConfig.entry = path.resolve(__dirname, 'src/index-dither.js');
+      } else if (appName === 'gameoflife') {
         webpackConfig.entry = path.resolve(__dirname, 'src/index-gameOfLife.js');
       } else {
         webpackConfig.entry = path.resolve(__dirname, 'src/index.js');
@@ -24,7 +26,10 @@ module.exports = {
       );
       
       if (HtmlWebpackPlugin) {
-        if (appName === 'gameoflife') {
+        if (appName === 'dither') {
+          HtmlWebpackPlugin.options.template = path.resolve(__dirname, 'public/dither.html');
+          HtmlWebpackPlugin.options.filename = 'index.html';
+        } else if (appName === 'gameoflife') {
           HtmlWebpackPlugin.options.template = path.resolve(__dirname, 'public/game-of-life.html');
           HtmlWebpackPlugin.options.filename = process.env.NODE_ENV === 'production' ? 'game-of-life.html' : 'index.html';
         } else {

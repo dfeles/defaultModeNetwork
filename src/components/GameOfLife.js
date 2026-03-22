@@ -485,7 +485,7 @@ function GameOfLife({
             0, // contrast
             0, // brightness
             null, // colorPalette (not used for binary)
-            50 // gradient
+            0, 255, 1 // levels: black, white, gamma (linear)
           );
         }
         
@@ -977,7 +977,7 @@ function GameOfLife({
           0, // contrast
           0, // brightness
           null, // colorPalette (not used for binary)
-          50 // gradient
+          0, 255, 1 // levels: black, white, gamma (linear)
         );
       }
       
