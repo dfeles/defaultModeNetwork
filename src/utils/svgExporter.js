@@ -1822,10 +1822,9 @@ export async function exportImageToSVG(texture, renderer, options = {}) {
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
 `;
   
-  // Only add background rectangle if renderBackground is true (always use random border color)
+  // Only add background rectangle if renderBackground is true
   if (renderBackground) {
-    const randomBorderColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
-    svg += `  <rect width="${width}" height="${height}" fill="${backgroundColor}" stroke="${randomBorderColor}" stroke-width="1"/>\n`;
+    svg += `  <rect width="${width}" height="${height}" fill="${backgroundColor}" stroke="#FFC0CB" stroke-width="1"/>\n`;
   }
 
   if (!texture || !texture.image) {
