@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { RotateCcw, Download, FileDown, ChevronDown, ChevronRight, Eye, EyeOff, X } from 'lucide-react';
+import { RotateCcw, Download, FileDown, ChevronDown, ChevronRight, Eye, EyeOff, X, Play, Pause } from 'lucide-react';
 import { ditherImageData } from './utils/webglDithering';
 import { makeOpaquePaletteOnly, applyColorAdjustments } from './utils/dithering';
 import { applyGenerativeEffect, buildGenerativeLinesSvg, buildGenerativeCirclesSvg, buildGenerativeParticlesSvg, buildGenerativeTopomapSvg, buildGenerativeSpiralSvg, buildGenerativeSpiralsSvg } from './utils/generativeEffect';
 import { exportImageToSVG, downloadSVG } from './utils/svgExporter';
 import { HersheyText, hersheyPaths, HERSHEY_FONTS } from './utils/hersheyFont';
+import { parseGifFrames, frameToImg } from './utils/gifDecoder';
 
 function randomColor() {
   return '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
@@ -227,6 +228,10 @@ export default function AppDither() {
   const [pixelScale, setPixelScale] = useState(100); // 1–100% size, rest is padding
   const [pixelShape, setPixelShape] = useState('square'); // 'square' | 'circle'
   const [canvasBgColor, setCanvasBgColor] = useState('#0a0a0a');
+  const [gifFrames, setGifFrames] = useState([]); // [{imageData, width, height, delay}] when a GIF is loaded
+  const [gifFrameIndex, setGifFrameIndex] = useState(0);
+  const [isGifPlaying, setIsGifPlaying] = useState(false);
+  const gifPlaySpeed = 8;
   const [transparentBg, setTransparentBg] = useState(false);
   const [accentColor, setAccentColor] = useState('#000000'); // line/circle/dither stroke; sampled from image on load
   const [applyGenerative, setApplyGenerative] = useState(false);
@@ -576,8 +581,8 @@ export default function AppDither() {
       setProcessedUrl(null);
     }
 
-    const w = imgElement.naturalWidth;
-    const h = imgElement.naturalHeight;
+    const w = imgElement.naturalWidth || imgElement.width;
+    const h = imgElement.naturalHeight || imgElement.height;
     let processW = w;
     let processH = h;
     if (w > resolution || h > resolution) {
@@ -873,6 +878,34 @@ export default function AppDither() {
     }
   };
 
+  // Reset GIF playback when new frames are loaded
+  useEffect(() => {
+    setGifFrameIndex(0);
+    setIsGifPlaying(false);
+  }, [gifFrames]);
+
+  // Process current GIF frame through dither pipeline when frame index changes
+  useEffect(() => {
+    if (gifFrames.length <= 1 || !imageFile) return;
+    const frame = gifFrames[gifFrameIndex];
+    if (!frame) return;
+    const frameCanvas = document.createElement('canvas');
+    frameCanvas.width = frame.width;
+    frameCanvas.height = frame.height;
+    frameCanvas.getContext('2d').putImageData(frame.imageData, 0, 0);
+    runDither(imageFile, frameCanvas);
+  }, [gifFrameIndex]); // eslint-disable-line
+
+  // Advance frames when playing
+  useEffect(() => {
+    if (!isGifPlaying || gifFrames.length <= 1) return;
+    const delay = Math.max(16, ((gifFrames[gifFrameIndex]?.delay || 10) * 10) / gifPlaySpeed);
+    const timer = setTimeout(() => {
+      setGifFrameIndex((i) => (i + 1) % gifFrames.length);
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [isGifPlaying, gifFrameIndex, gifFrames, gifPlaySpeed]);
+
   const isLightColor = (hex) => {
     const r = parseInt(hex.slice(1, 3), 16);
     const g = parseInt(hex.slice(3, 5), 16);
@@ -903,6 +936,12 @@ export default function AppDither() {
     setImageFile(file);
     setImagePreviewUrl(newUrl);
     setProcessedUrl(null);
+    // Parse GIF frames if applicable
+    if (file.type === 'image/gif') {
+      parseGifFrames(file).then(setGifFrames).catch(() => setGifFrames([]));
+    } else {
+      setGifFrames([]);
+    }
   };
 
   const handleReplaceImage = (file) => {
@@ -916,6 +955,11 @@ export default function AppDither() {
     setImageFile(file);
     setImagePreviewUrl(newUrl);
     setProcessedUrl(null);
+    if (file.type === 'image/gif') {
+      parseGifFrames(file).then(setGifFrames).catch(() => setGifFrames([]));
+    } else {
+      setGifFrames([]);
+    }
   };
 
   const handleDrop = (e) => {
@@ -987,43 +1031,57 @@ export default function AppDither() {
     a.click();
   };
 
+  const buildSvgExportOptions = (w, h) => {
+    const transparentStroke = exportTransparentStrokeOnly;
+    const effectiveStroke = strokeColor ?? accentColor ?? (isLightColor(canvasBgColor) ? '#000000' : '#ffffff');
+    const ditherStrokeColor = transparentStroke ? effectiveStroke : (strokeColor ?? undefined);
+    return {
+      width: w, height: h, imageWidth: w, imageHeight: h,
+      backgroundColor: canvasBgColor,
+      applyDithering,
+      applyColorPalette: usePalette,
+      colorPalette: usePalette && colorPalette.length > 0 ? colorPalette : undefined,
+      ditheringResolution: resolution,
+      ditheringThreshold: threshold,
+      ditheringContrast: contrast,
+      ditheringBrightness: brightness,
+      ditheringLevelsBlack: levelsBlack,
+      ditheringLevelsWhite: levelsWhite,
+      ditheringLevelsGamma: levelsGamma,
+      ditheringMethod: method,
+      ditheringColorCount: (usePalette && colorPalette.length > 0) ? colorPalette.length : 2,
+      exportMode,
+      renderBackground: transparentStroke ? false : renderBackground,
+      exportWhiteOnly: !isLightColor(canvasBgColor),
+      strokeColor: ditherStrokeColor,
+      strokeWidth: ditherStrokeColor ? strokeWidth : undefined,
+      pixelScale,
+      pixelShape,
+    };
+  };
+
   const handleDownloadSvg = async () => {
     const img = imgRef.current;
     if (!imageFile || !img || !img.complete || !img.naturalWidth) return;
     setIsGeneratingSvg(true);
     try {
-      const texture = { image: img };
+      // GIF: export one SVG per frame
+      if (gifFrames.length > 1) {
+        const baseName = (imageFile?.name || 'export').replace(/\.[^.]+$/, '');
+        for (let i = 0; i < gifFrames.length; i++) {
+          const frameImg = await frameToImg(gifFrames[i]);
+          const { width, height } = gifFrames[i];
+          const svgString = await exportImageToSVG({ image: frameImg }, null, buildSvgExportOptions(width, height));
+          downloadSVG(svgString, `${baseName}-frame-${String(i + 1).padStart(3, '0')}.svg`);
+          // Small delay so browser doesn't swallow downloads
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        return;
+      }
+      // Single image export
       const w = img.naturalWidth;
       const h = img.naturalHeight;
-      const transparentStroke = exportTransparentStrokeOnly;
-      const effectiveStroke = strokeColor ?? accentColor ?? (isLightColor(canvasBgColor) ? '#000000' : '#ffffff');
-      const ditherStrokeColor = transparentStroke ? effectiveStroke : (strokeColor ?? undefined);
-      const svgString = await exportImageToSVG(texture, null, {
-        width: w,
-        height: h,
-        imageWidth: w,
-        imageHeight: h,
-        backgroundColor: canvasBgColor,
-        applyDithering,
-        applyColorPalette: usePalette,
-        colorPalette: usePalette && colorPalette.length > 0 ? colorPalette : undefined,
-        ditheringResolution: resolution,
-        ditheringThreshold: threshold,
-        ditheringContrast: contrast,
-        ditheringBrightness: brightness,
-        ditheringLevelsBlack: levelsBlack,
-        ditheringLevelsWhite: levelsWhite,
-        ditheringLevelsGamma: levelsGamma,
-        ditheringMethod: method,
-        ditheringColorCount: (usePalette && colorPalette.length > 0) ? colorPalette.length : 2,
-        exportMode,
-        renderBackground: transparentStroke ? false : renderBackground,
-        exportWhiteOnly: !isLightColor(canvasBgColor),
-        strokeColor: ditherStrokeColor,
-        strokeWidth: ditherStrokeColor ? strokeWidth : undefined,
-        pixelScale,
-        pixelShape,
-      });
+      const svgString = await exportImageToSVG({ image: img }, null, buildSvgExportOptions(w, h));
       const filename = (imageFile?.name || 'export').replace(/\.[^.]+$/, '') + '-dithered.svg';
       downloadSVG(svgString, filename);
       const blob = new Blob([svgString], { type: 'image/svg+xml' });
@@ -1040,14 +1098,117 @@ export default function AppDither() {
     }
   };
 
-  const handleExportGenerativeSvg = async () => {
+  const handleSendToAnimate = async () => {
     const img = imgRef.current;
     if (!imageFile || !img || !img.complete || !img.naturalWidth) return;
     setIsGeneratingSvg(true);
     try {
-      const exportData = await runDither(imageFile, img, true);
-      if (!exportData) return;
-      const { width, height, imageData, backgroundColor, strokeStyle } = exportData;
+      const framesToProcess = gifFrames.length > 1 ? gifFrames : null;
+      const baseName = (imageFile?.name || 'export').replace(/\.[^.]+$/, '');
+
+      const makeSvgBlobUrl = async (svgString, name) => {
+        const blob = new Blob([svgString], { type: 'image/svg+xml' });
+        return { url: URL.createObjectURL(blob), name };
+      };
+
+      if (framesToProcess) {
+        const newLayers = [];
+        for (let i = 0; i < framesToProcess.length; i++) {
+          const frameCanvas = document.createElement('canvas');
+          frameCanvas.width = framesToProcess[i].width;
+          frameCanvas.height = framesToProcess[i].height;
+          frameCanvas.getContext('2d').putImageData(framesToProcess[i].imageData, 0, 0);
+          const w = framesToProcess[i].width;
+          const h = framesToProcess[i].height;
+          const svgString = await exportImageToSVG({ image: frameCanvas }, null, buildSvgExportOptions(w, h));
+          const name = `${baseName}-frame-${String(i + 1).padStart(3, '0')}.svg`;
+          const { url } = await makeSvgBlobUrl(svgString, name);
+          newLayers.push({ id: `al-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`, name, imagePreviewUrl: url });
+        }
+        setAnimateLayers((prev) => [...prev, ...newLayers]);
+      } else {
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        const svgString = await exportImageToSVG({ image: img }, null, buildSvgExportOptions(w, h));
+        const name = `${baseName}.svg`;
+        const { url } = await makeSvgBlobUrl(svgString, name);
+        setAnimateLayers((prev) => [...prev, { id: `al-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name, imagePreviewUrl: url }]);
+      }
+
+      setPage('animate');
+    } catch (err) {
+      console.error('Send to Animate error:', err);
+    } finally {
+      setIsGeneratingSvg(false);
+    }
+  };
+
+  const handleSendGenerativeToAnimate = async () => {
+    const img = imgRef.current;
+    if (!imageFile || !img || !img.complete || !img.naturalWidth) return;
+    setIsGeneratingSvg(true);
+    try {
+      const framesToProcess = gifFrames.length > 1 ? gifFrames : null;
+      const baseName = (imageFile?.name || 'export').replace(/\.[^.]+$/, '');
+
+      const processFrame = async (drawable, w, h) => {
+        const exportData = await runDither(imageFile, drawable, true);
+        if (!exportData) return null;
+        const { width, height, imageData, backgroundColor, strokeStyle } = exportData;
+        const opts = {
+          dpr: Math.min(3, Math.max(1, window.devicePixelRatio || 1)),
+          density: generativeDensity, regularity: generativeRegularity, dislocate: generativeDislocate,
+          noiseAmplitude: generativeNoiseAmplitude, perlinAmplitude: generativePerlinAmplitude, perlinFrequency: generativePerlinFrequency,
+          sineAmplitude: generativeSineAmplitude, sineFrequency: generativeSineFrequency,
+          maskOn: generativeMaskOn, maskCoveringLines: generativeMaskCoveringLines, maskCoverPadding: generativeMaskCoverPadding,
+          rotation: generativeRotation, centerX: generativeCenterX, centerY: generativeCenterY,
+          linesPerspective: generativeLinesPerspective, renderBackground: 'stroke', backgroundColor, strokeStyle,
+        };
+        const svg = generativeMode === 'circles' ? buildGenerativeCirclesSvg(width, height, imageData, opts)
+          : generativeMode === 'particles' ? buildGenerativeParticlesSvg(width, height, imageData, { ...opts, particleTilt: generativeParticleTilt, particleGrain: generativeParticleGrain, particleRotation: generativeParticleRotation, particleSmoothness: generativeParticleSmoothness, particleWindX: generativeParticleWindX, particleWindY: generativeParticleWindY, particlePerlinAmp: generativeParticlePerlinAmp, particlePerlinFreq: generativeParticlePerlinFreq, separation: generativeSeparation, cohesion: generativeCohesion, alignment: generativeAlignment, avoidLines: generativeAvoidLines, simulationLength: generativeSimulationLength, particleLifetime: generativeParticleLifetime, spawnMode: generativeSpawnMode, spawnInterval: generativeSpawnInterval, maxParticles: generativeMaxParticles })
+          : generativeMode === 'topomap' ? buildGenerativeTopomapSvg(width, height, imageData, { ...opts, topomapSmoothness: generativeTopomapSmoothness })
+          : generativeMode === 'spiral' ? buildGenerativeSpiralSvg(width, height, imageData, { ...opts, spiralDent: generativeSpiralDent, spiralTurns: generativeSpiralTurns, spiralDepthMask: generativeSpiralDepthMask })
+          : generativeMode === 'spirals' ? buildGenerativeSpiralsSvg(width, height, imageData, { ...opts, spiralDent: generativeSpiralDent, spiralTurns: generativeSpiralTurns, spiralSize: generativeSpiralSize, spiralSizeVariance: generativeSpiralSizeVariance, spiralDepthMask: generativeSpiralDepthMask })
+          : buildGenerativeLinesSvg(width, height, imageData, opts);
+        return svg;
+      };
+
+      if (framesToProcess) {
+        const newLayers = [];
+        for (let i = 0; i < framesToProcess.length; i++) {
+          const frameCanvas = document.createElement('canvas');
+          frameCanvas.width = framesToProcess[i].width;
+          frameCanvas.height = framesToProcess[i].height;
+          frameCanvas.getContext('2d').putImageData(framesToProcess[i].imageData, 0, 0);
+          const svg = await processFrame(frameCanvas);
+          if (!svg) continue;
+          const blob = new Blob([svg], { type: 'image/svg+xml' });
+          const name = `${baseName}-frame-${String(i + 1).padStart(3, '0')}-generative.svg`;
+          newLayers.push({ id: `al-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`, name, imagePreviewUrl: URL.createObjectURL(blob) });
+        }
+        setAnimateLayers((prev) => [...prev, ...newLayers]);
+      } else {
+        const svg = await processFrame(img);
+        if (svg) {
+          const blob = new Blob([svg], { type: 'image/svg+xml' });
+          const name = `${baseName}-generative.svg`;
+          setAnimateLayers((prev) => [...prev, { id: `al-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name, imagePreviewUrl: URL.createObjectURL(blob) }]);
+        }
+      }
+      setPage('animate');
+    } catch (err) {
+      console.error('Send Generative to Animate error:', err);
+    } finally {
+      setIsGeneratingSvg(false);
+    }
+  };
+
+  const handleExportGenerativeSvg = async () => {
+    const img = imgRef.current;
+    if (!imageFile || !img || !img.complete || !img.naturalWidth) return;
+    setIsGeneratingSvg(true);
+
+    const buildGenerativeSvg = ({ width, height, imageData, backgroundColor, strokeStyle }) => {
       const opts = {
         dpr: Math.min(3, Math.max(1, window.devicePixelRatio || 1)),
         density: generativeDensity,
@@ -1065,7 +1226,7 @@ export default function AppDither() {
         centerX: generativeCenterX,
         centerY: generativeCenterY,
         linesPerspective: generativeLinesPerspective,
-        renderBackground: 'stroke', // transparent fill + stroke outline
+        renderBackground: 'stroke',
         backgroundColor,
         strokeStyle,
       };
@@ -1099,6 +1260,30 @@ export default function AppDither() {
         : generativeMode === 'spirals'
         ? buildGenerativeSpiralsSvg(width, height, imageData, { ...opts, spiralDent: generativeSpiralDent, spiralTurns: generativeSpiralTurns, spiralSize: generativeSpiralSize, spiralSizeVariance: generativeSpiralSizeVariance, spiralDepthMask: generativeSpiralDepthMask })
         : buildGenerativeLinesSvg(width, height, imageData, opts);
+      return svg;
+    };
+
+    try {
+      // GIF: export one SVG per frame
+      if (gifFrames.length > 1) {
+        const baseName = (imageFile?.name || 'export').replace(/\.[^.]+$/, '');
+        for (let i = 0; i < gifFrames.length; i++) {
+          const frameCanvas = document.createElement('canvas');
+          frameCanvas.width = gifFrames[i].width;
+          frameCanvas.height = gifFrames[i].height;
+          frameCanvas.getContext('2d').putImageData(gifFrames[i].imageData, 0, 0);
+          const exportData = await runDither(imageFile, frameCanvas, true);
+          if (!exportData) continue;
+          const svg = buildGenerativeSvg(exportData);
+          downloadSVG(svg, `${baseName}-frame-${String(i + 1).padStart(3, '0')}-generative.svg`);
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        return;
+      }
+      // Single image
+      const exportData = await runDither(imageFile, img, true);
+      if (!exportData) return;
+      const svg = buildGenerativeSvg(exportData);
       const filename = (imageFile?.name || 'export').replace(/\.[^.]+$/, '') + '-generative.svg';
       downloadSVG(svg, filename);
       const blob = new Blob([svg], { type: 'image/svg+xml' });
@@ -1755,6 +1940,21 @@ export default function AppDither() {
           {!imageFile && (
             <span className="text-lg text-dither-muted-mid">Drop image anywhere or use sidebar</span>
           )}
+          {gifFrames.length > 1 && (
+            <div className="absolute top-3 left-3 z-20 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsGifPlaying((v) => !v)}
+                className="flex items-center justify-center w-8 h-8 rounded-full bg-black/60 text-white hover:bg-black/80 transition-colors cursor-pointer"
+                title={isGifPlaying ? 'Pause' : 'Play'}
+              >
+                {isGifPlaying ? <Pause size={14} /> : <Play size={14} />}
+              </button>
+              <span className="text-[11px] text-white/70 bg-black/50 px-1.5 py-0.5 rounded font-mono">
+                {gifFrameIndex + 1} / {gifFrames.length}
+              </span>
+            </div>
+          )}
           {isProcessing && (
             <div className="absolute w-8 h-8 border-[3px] border-dither-border-hover border-t-dither-muted rounded-full animate-dither-spin" />
           )}
@@ -1936,7 +2136,7 @@ export default function AppDither() {
                       {exportFormat === 'svg' ? (
                         <>
                           <FileDown size={18} aria-hidden />
-                          {isGeneratingSvg ? 'Generating…' : 'Download SVG'}
+                          {isGeneratingSvg ? 'Generating…' : gifFrames.length > 1 ? `Download SVG (${gifFrames.length} frames)` : 'Download SVG'}
                         </>
                       ) : (
                         <>
@@ -1945,6 +2145,18 @@ export default function AppDither() {
                         </>
                       )}
                     </button>
+                    {exportFormat === 'svg' && (
+                      <button
+                        type="button"
+                        className="flex items-center justify-center gap-2 py-2 px-4 text-[13px] font-medium bg-dither-panel border border-dither-border rounded-lg text-dither-muted-light cursor-pointer transition-colors hover:bg-dither-border hover:text-dither-text disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={handleSendToAnimate}
+                        disabled={!imageFile || isProcessing || isGeneratingSvg}
+                        title="Process and send directly to Animate page"
+                      >
+                        <FileDown size={16} aria-hidden />
+                        {isGeneratingSvg ? 'Processing…' : gifFrames.length > 1 ? `Send to Animate (${gifFrames.length} frames)` : 'Send to Animate'}
+                      </button>
+                    )}
                     {exportFormat === 'svg' && (
                       <>
                         <div className="flex flex-col gap-1">
@@ -2307,7 +2519,17 @@ export default function AppDither() {
                 title="Export generative lines as vector SVG"
               >
                 <FileDown size={18} aria-hidden />
-                {isGeneratingSvg ? 'Generating…' : 'Export as SVG'}
+                {isGeneratingSvg ? 'Generating…' : gifFrames.length > 1 ? `Export as SVG (${gifFrames.length} frames)` : 'Export as SVG'}
+              </button>
+              <button
+                type="button"
+                className="flex items-center justify-center gap-2 py-2 px-4 text-[13px] font-medium bg-dither-panel border border-dither-border rounded-lg text-dither-muted-light cursor-pointer transition-colors hover:bg-dither-border hover:text-dither-text disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleSendGenerativeToAnimate}
+                disabled={!imageFile || isProcessing || isGeneratingSvg}
+                title="Process and send directly to Animate page"
+              >
+                <FileDown size={16} aria-hidden />
+                {isGeneratingSvg ? 'Processing…' : gifFrames.length > 1 ? `Send to Animate (${gifFrames.length} frames)` : 'Send to Animate'}
               </button>
                 <div className="flex flex-row items-center justify-between gap-1 mt-2">
                 <label className="text-xs text-dither-muted-light">Export background</label>

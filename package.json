@@ -9,6 +9,7 @@
     "@react-three/fiber": "^8.15.11",
     "d3-selection": "^3.0.0",
     "d3-zoom": "^3.0.0",
+    "gifuct-js": "^2.1.2",
     "heic2any": "^0.0.4",
     "hersheytext": "^2.0.0",
     "lucide-react": "^0.555.0",
