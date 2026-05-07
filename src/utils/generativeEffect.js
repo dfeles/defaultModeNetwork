@@ -93,20 +93,20 @@ function isContentPixel(data, x, y, width, height, bgRgb) {
 }
 
 /** Seeded random in [0, 1) for reproducible line placement. */
-function seededRand(seed) {
-  const x = Math.sin(seed * 7919) * 10000;
+function seededRand(seed, base = 0) {
+  const x = Math.sin((seed + base) * 7919) * 10000;
   return x - Math.floor(x);
 }
 
 /** Create a new particle at a random position (on content if maskOn). Used for respawn/drip. */
-function spawnParticleOnContent(data, width, height, bgRgb, maskOn, rotationRad, seed) {
+function spawnParticleOnContent(data, width, height, bgRgb, maskOn, rotationRad, seed, baseSeed = 0) {
   for (let t = 0; t < 200; t++) {
-    const x = seededRand(seed + t * 11) * width;
-    const y = seededRand(seed + t * 13 + 4096) * height; // offset so x,y not same (was causing diagonal spawn line)
+    const x = seededRand(seed + t * 11, baseSeed) * width;
+    const y = seededRand(seed + t * 13 + 4096, baseSeed) * height; // offset so x,y not same (was causing diagonal spawn line)
     if (!maskOn || isContentPixel(data, x, y, width, height, bgRgb)) {
       return {
         x, y,
-        angle: seededRand(seed + t * 17) * Math.PI * 2 + rotationRad,
+        angle: seededRand(seed + t * 17, baseSeed) * Math.PI * 2 + rotationRad,
         active: true,
         stepsWithoutContent: 0,
         path: [],
@@ -117,7 +117,7 @@ function spawnParticleOnContent(data, width, height, bgRgb, maskOn, rotationRad,
   return {
     x: width / 2,
     y: height / 2,
-    angle: seededRand(seed) * Math.PI * 2 + rotationRad,
+    angle: seededRand(seed, baseSeed) * Math.PI * 2 + rotationRad,
     active: true,
     stepsWithoutContent: 0,
     path: [],
@@ -140,7 +140,7 @@ function spawnParticleAtPosition(x, y, angle) {
 /**
  * Line Y positions: regularity 100 = even spacing, 0 = random, in-between = jittered.
  */
-function getLineYs(yMin, yMax, lineSpacing, regularity) {
+function getLineYs(yMin, yMax, lineSpacing, regularity, seedBase = 0) {
   const r = regularity ?? 100;
   const n = Math.max(1, Math.ceil((yMax - yMin) / lineSpacing));
   if (r >= 100) {
@@ -150,14 +150,14 @@ function getLineYs(yMin, yMax, lineSpacing, regularity) {
   }
   if (r <= 0) {
     const out = [];
-    for (let i = 0; i < n; i++) out.push(yMin + (yMax - yMin) * seededRand(i));
+    for (let i = 0; i < n; i++) out.push(yMin + (yMax - yMin) * seededRand(i, seedBase));
     out.sort((a, b) => a - b);
     return out;
   }
   const jitterScale = (1 - r / 100) * lineSpacing;
   const out = [];
   let i = 0;
-  for (let y = yMin; y < yMax; y += lineSpacing) out.push(y + jitterScale * (2 * seededRand(i++) - 1));
+  for (let y = yMin; y < yMax; y += lineSpacing) out.push(y + jitterScale * (2 * seededRand(i++, seedBase) - 1));
   out.sort((a, b) => a - b);
   return out;
 }
@@ -212,13 +212,17 @@ export function applyGenerativeLines(ctx, width, height, imageData, options = {}
     backgroundColor = '#ffffff',
   } = options;
 
+  const noiseOX = (options.seed ?? 0) * 13.7 + (options.time ?? 0) * 0.1;
+  const noiseOY = (options.seed ?? 0) * 7.3;
+  const seedBase = (options.seed ?? 0) * 99991 + Math.floor((options.time ?? 0) * 1000);
+
   const data = imageData.data;
   const bgRgb = parseBgHex(backgroundColor);
 
   ctx.fillStyle = backgroundColor;
   ctx.fillRect(0, 0, width, height);
   ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = dpr;
+  ctx.lineWidth = (options.lineWidth ?? 1) * dpr;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
@@ -236,12 +240,12 @@ export function applyGenerativeLines(ctx, width, height, imageData, options = {}
     )) + 2;
     const numLines = Math.max(8, Math.ceil((2 * Math.PI * maxR) / lineSpacing));
     const angleStep = (2 * Math.PI) / numLines;
-    let angles = getLineYs(0, 2 * Math.PI - angleStep * 0.5, angleStep, regularity);
+    let angles = getLineYs(0, 2 * Math.PI - angleStep * 0.5, angleStep, regularity, seedBase);
     if (maskCoveringLines === 'bottom-up') angles = angles.slice().reverse();
 
     const useEnvelope = maskCoveringLines !== 'off';
     const topDown = maskCoveringLines === 'top-down';
-    const envelopeLen = 720;
+    const envelopeLen = useEnvelope ? Math.ceil(width) + 1 : 0;
     const envelope = useEnvelope ? new Float32Array(envelopeLen) : null;
     if (envelope) {
       for (let i = 0; i < envelopeLen; i++) envelope[i] = topDown ? -Infinity : Infinity;
@@ -278,18 +282,18 @@ export function applyGenerativeLines(ctx, width, height, imageData, options = {}
         const t = 1 - lum / 255;
 
         let disp = t * dislocate;
-        if (noiseAmp > 0) disp += t * noiseAmp * pixelNoise2(r / noiseFreq, theta * noiseFreq);
-        if (perlinAmp > 0) disp += t * perlinAmp * perlin2(r * perlinFreq * 0.02, theta * perlinFreq * 2);
+        if (noiseAmp > 0) disp += t * noiseAmp * pixelNoise2(r / noiseFreq + noiseOX, theta * noiseFreq + noiseOY);
+        if (perlinAmp > 0) disp += t * perlinAmp * perlin2(r * perlinFreq * 0.02 + noiseOX, theta * perlinFreq * 2 + noiseOY);
         if (sineAmp > 0) disp += t * sineAmp * Math.sin(theta * sineFreq);
 
         const px = lx + disp * perpX;
         const py = ly + disp * perpY;
 
         if (useEnvelope) {
-          const angleIdx = Math.min(envelopeLen - 1, Math.max(0, Math.floor(((theta % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / (2 * Math.PI) * envelopeLen)));
+          const eIdx = Math.min(envelopeLen - 1, Math.max(0, Math.round(lx)));
           const notCovered = topDown
-            ? r > envelope[angleIdx] + maskCoverPadding
-            : r < envelope[angleIdx] - maskCoverPadding;
+            ? ly > envelope[eIdx] + maskCoverPadding
+            : ly < envelope[eIdx] - maskCoverPadding;
           if (!notCovered) {
             if (started) {
               ctx.stroke();
@@ -298,7 +302,7 @@ export function applyGenerativeLines(ctx, width, height, imageData, options = {}
             }
             continue;
           }
-          envelope[angleIdx] = topDown ? Math.min(envelope[angleIdx], r) : Math.max(envelope[angleIdx], r);
+          envelope[eIdx] = topDown ? Math.max(envelope[eIdx], py) : Math.min(envelope[eIdx], py);
         }
 
         if (!started) {
@@ -334,7 +338,7 @@ export function applyGenerativeLines(ctx, width, height, imageData, options = {}
   const yMin = rotated ? -diag : lineSpacing;
   const yMax = rotated ? height + diag : height;
 
-  let lineYs = getLineYs(yMin, yMax, lineSpacing, regularity);
+  let lineYs = getLineYs(yMin, yMax, lineSpacing, regularity, seedBase);
   if (maskCoveringLines === 'bottom-up') lineYs = lineYs.slice().reverse();
 
   const useEnvelope = maskCoveringLines !== 'off';
@@ -374,11 +378,11 @@ export function applyGenerativeLines(ctx, width, height, imageData, options = {}
 
       let offsetY = t * dislocate;
       if (noiseAmp > 0) {
-        offsetY += t * noiseAmp * pixelNoise2(x / noiseFreq, lineY / noiseFreq);
+        offsetY += t * noiseAmp * pixelNoise2(x / noiseFreq + noiseOX, lineY / noiseFreq + noiseOY);
       }
       if (perlinAmp > 0) {
-        const nx = x * perlinFreq * 0.02;
-        const ny = lineY * perlinFreq * 0.02;
+        const nx = x * perlinFreq * 0.02 + noiseOX;
+        const ny = lineY * perlinFreq * 0.02 + noiseOY;
         offsetY += t * perlinAmp * perlin2(nx, ny);
       }
       if (sineAmp > 0) {
@@ -446,6 +450,10 @@ export function applyGenerativeCircles(ctx, width, height, imageData, options = 
     centerY = 0.5,
   } = options;
 
+  const noiseOX = (options.seed ?? 0) * 13.7 + (options.time ?? 0) * 0.1;
+  const noiseOY = (options.seed ?? 0) * 7.3;
+  const seedBase = (options.seed ?? 0) * 99991 + Math.floor((options.time ?? 0) * 1000);
+
   const cx = width * centerX;
   const cy = height * centerY;
   const maxDist = Math.max(
@@ -461,11 +469,11 @@ export function applyGenerativeCircles(ctx, width, height, imageData, options = 
   ctx.fillStyle = backgroundColor;
   ctx.fillRect(0, 0, width, height);
   ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = dpr;
+  ctx.lineWidth = (options.lineWidth ?? 1) * dpr;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  let radii = getLineYs(radiusSpacing, maxRadius, radiusSpacing, regularity);
+  let radii = getLineYs(radiusSpacing, maxRadius, radiusSpacing, regularity, seedBase);
   if (maskCoveringLines === 'bottom-up') radii = radii.slice().reverse();
 
   const useEnvelope = maskCoveringLines !== 'off';
@@ -500,8 +508,8 @@ export function applyGenerativeCircles(ctx, width, height, imageData, options = 
       const t = 1 - lum / 255;
 
       let displacement = t * dislocate;
-      if (noiseAmp > 0) displacement += t * noiseAmp * pixelNoise2(x, y);
-      if (perlinAmp > 0) displacement += t * perlinAmp * perlin2(r * perlinFreq * 0.02, theta * perlinFreq * 2);
+      if (noiseAmp > 0) displacement += t * noiseAmp * pixelNoise2(x + noiseOX, y + noiseOY);
+      if (perlinAmp > 0) displacement += t * perlinAmp * perlin2(r * perlinFreq * 0.02 + noiseOX, theta * perlinFreq * 2 + noiseOY);
       if (sineAmp > 0) displacement += t * sineAmp * Math.sin(theta * sineFreq);
 
       const effectiveR = r + displacement;
@@ -566,6 +574,10 @@ export function buildGenerativeLinesSvg(width, height, imageData, options = {}) 
   const backgroundColor = options.backgroundColor ?? '#ffffff';
   const renderBackground = options.renderBackground ?? true;
 
+  const noiseOX = (options.seed ?? 0) * 13.7 + (options.time ?? 0) * 0.1;
+  const noiseOY = (options.seed ?? 0) * 7.3;
+  const seedBase = (options.seed ?? 0) * 99991 + Math.floor((options.time ?? 0) * 1000);
+
   const data = imageData.data;
   const bgRgb = parseBgHex(backgroundColor);
 
@@ -582,7 +594,7 @@ export function buildGenerativeLinesSvg(width, height, imageData, options = {}) 
     )) + 2;
     const numLines = Math.max(8, Math.ceil((2 * Math.PI * maxR) / lineSpacing));
     const angleStep = (2 * Math.PI) / numLines;
-    let angles = getLineYs(0, 2 * Math.PI - angleStep * 0.5, angleStep, regularity);
+    let angles = getLineYs(0, 2 * Math.PI - angleStep * 0.5, angleStep, regularity, seedBase);
     if (maskCoveringLines === 'bottom-up') angles = angles.slice().reverse();
 
     const useEnvelope = maskCoveringLines !== 'off';
@@ -622,8 +634,8 @@ export function buildGenerativeLinesSvg(width, height, imageData, options = {}) 
         const t = 1 - lum / 255;
 
         let disp = t * dislocate;
-        if (noiseAmp > 0) disp += t * noiseAmp * pixelNoise2(r / noiseFreq, theta * noiseFreq);
-        if (perlinAmp > 0) disp += t * perlinAmp * perlin2(r * perlinFreq * 0.02, theta * perlinFreq * 2);
+        if (noiseAmp > 0) disp += t * noiseAmp * pixelNoise2(r / noiseFreq + noiseOX, theta * noiseFreq + noiseOY);
+        if (perlinAmp > 0) disp += t * perlinAmp * perlin2(r * perlinFreq * 0.02 + noiseOX, theta * perlinFreq * 2 + noiseOY);
         if (sineAmp > 0) disp += t * sineAmp * Math.sin(theta * sineFreq);
 
         const px = Math.round((lx + disp * perpX) * 100) / 100;
@@ -687,7 +699,7 @@ export function buildGenerativeLinesSvg(width, height, imageData, options = {}) 
   const yMin = rotated ? -diag : lineSpacing;
   const yMax = rotated ? height + diag : height;
 
-  let lineYs = getLineYs(yMin, yMax, lineSpacing, regularity);
+  let lineYs = getLineYs(yMin, yMax, lineSpacing, regularity, seedBase);
   if (maskCoveringLines === 'bottom-up') lineYs = lineYs.slice().reverse();
 
   const useEnvelope = maskCoveringLines !== 'off';
@@ -718,11 +730,11 @@ export function buildGenerativeLinesSvg(width, height, imageData, options = {}) 
 
       let offsetY = t * dislocate;
       if (noiseAmp > 0) {
-        offsetY += t * noiseAmp * pixelNoise2(x / noiseFreq, lineY / noiseFreq);
+        offsetY += t * noiseAmp * pixelNoise2(x / noiseFreq + noiseOX, lineY / noiseFreq + noiseOY);
       }
       if (perlinAmp > 0) {
-        const nx = x * perlinFreq * 0.02;
-        const ny = lineY * perlinFreq * 0.02;
+        const nx = x * perlinFreq * 0.02 + noiseOX;
+        const ny = lineY * perlinFreq * 0.02 + noiseOY;
         offsetY += t * perlinAmp * perlin2(nx, ny);
       }
       if (sineAmp > 0) {
@@ -799,6 +811,10 @@ export function buildGenerativeCirclesSvg(width, height, imageData, options = {}
   const centerX = options.centerX ?? 0.5;
   const centerY = options.centerY ?? 0.5;
 
+  const noiseOX = (options.seed ?? 0) * 13.7 + (options.time ?? 0) * 0.1;
+  const noiseOY = (options.seed ?? 0) * 7.3;
+  const seedBase = (options.seed ?? 0) * 99991 + Math.floor((options.time ?? 0) * 1000);
+
   const cx = width * centerX;
   const cy = height * centerY;
   const maxDist = Math.max(
@@ -811,7 +827,7 @@ export function buildGenerativeCirclesSvg(width, height, imageData, options = {}
   const data = imageData.data;
   const bgRgb = parseBgHex(backgroundColor);
 
-  let radii = getLineYs(radiusSpacing, maxRadius, radiusSpacing, regularity);
+  let radii = getLineYs(radiusSpacing, maxRadius, radiusSpacing, regularity, seedBase);
   if (maskCoveringLines === 'bottom-up') radii = radii.slice().reverse();
 
   const useEnvelope = maskCoveringLines !== 'off';
@@ -843,8 +859,8 @@ export function buildGenerativeCirclesSvg(width, height, imageData, options = {}
       const lum = getLuminance(data, x, y, width, height);
       const t = 1 - lum / 255;
       let displacement = t * dislocate;
-      if (noiseAmp > 0) displacement += t * noiseAmp * pixelNoise2(x, y);
-      if (perlinAmp > 0) displacement += t * perlinAmp * perlin2(r * perlinFreq * 0.02, theta * perlinFreq * 2);
+      if (noiseAmp > 0) displacement += t * noiseAmp * pixelNoise2(x + noiseOX, y + noiseOY);
+      if (perlinAmp > 0) displacement += t * perlinAmp * perlin2(r * perlinFreq * 0.02 + noiseOX, theta * perlinFreq * 2 + noiseOY);
       if (sineAmp > 0) displacement += t * sineAmp * Math.sin(theta * sineFreq);
       const effectiveR = r + displacement;
       const px = Math.round((cx + effectiveR * Math.cos(theta)) * 100) / 100;
@@ -919,6 +935,10 @@ export function applyGenerativeParticles(ctx, width, height, imageData, options 
   const spawnMode = options.spawnMode ?? 'once'; // 'once' | 'respawn' | 'drip'
   const spawnInterval = Math.max(1, options.spawnInterval ?? 50); // for drip: steps between spawns
   const maxParticles = options.maxParticles ?? 2000; // cap for drip mode
+
+  const noiseOX = (options.seed ?? 0) * 13.7 + (options.time ?? 0) * 0.1;
+  const noiseOY = (options.seed ?? 0) * 7.3;
+  const seedBase = (options.seed ?? 0) * 99991 + Math.floor((options.time ?? 0) * 1000);
   
   // Line-avoidance grid (cells that have been drawn)
   const cellSize = Math.max(4, 6 * dpr);
@@ -943,7 +963,7 @@ export function applyGenerativeParticles(ctx, width, height, imageData, options 
   ctx.fillStyle = backgroundColor;
   ctx.fillRect(0, 0, width, height);
   ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = dpr * 0.5;
+  ctx.lineWidth = (options.lineWidth ?? 1) * dpr * 0.5;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
@@ -957,9 +977,9 @@ export function applyGenerativeParticles(ctx, width, height, imageData, options 
   const particles = [];
   for (let p = 0; p < initialCount; p++) {
     particles.push({
-      x: seededRand(p * 1234) * width,
-      y: seededRand(p * 5678) * height,
-      angle: seededRand(p * 9012) * Math.PI * 2 + rotationRad,
+      x: seededRand(p * 1234, seedBase) * width,
+      y: seededRand(p * 5678, seedBase) * height,
+      angle: seededRand(p * 9012, seedBase) * Math.PI * 2 + rotationRad,
       active: true,
       stepsWithoutContent: 0,
       path: [],
@@ -971,7 +991,7 @@ export function applyGenerativeParticles(ctx, width, height, imageData, options 
   for (let step = 0; step < maxSteps; step++) {
     // Drip: spawn one new particle every spawnInterval steps (capped by maxParticles)
     if (spawnMode === 'drip' && step > 0 && step % spawnInterval === 0 && particles.length < maxParticles) {
-      particles.push(spawnParticleOnContent(data, width, height, bgRgb, maskOn, rotationRad, step * 9999));
+      particles.push(spawnParticleOnContent(data, width, height, bgRgb, maskOn, rotationRad, step * 9999, seedBase));
     }
 
     const toSpawn = []; // for respawn: new particles to add at end of step
@@ -1009,8 +1029,8 @@ export function applyGenerativeParticles(ctx, width, height, imageData, options 
         let pathX = x;
         let pathY = y;
         if (particleGrain > 0) {
-          const grainNoiseX = (seededRand(p * 7777 + step * 3333) - 0.5) * 2;
-          const grainNoiseY = (seededRand(p * 8888 + step * 4444) - 0.5) * 2;
+          const grainNoiseX = (seededRand(p * 7777 + step * 3333, seedBase) - 0.5) * 2;
+          const grainNoiseY = (seededRand(p * 8888 + step * 4444, seedBase) - 0.5) * 2;
           pathX += grainNoiseX * (particleGrain / 100) * dpr * 2;
           pathY += grainNoiseY * (particleGrain / 100) * dpr * 2;
         }
@@ -1039,8 +1059,8 @@ export function applyGenerativeParticles(ctx, width, height, imageData, options 
       // Perlin noise
       if (particlePerlinAmp > 0) {
         const perlinFreqScaled = particlePerlinFreq / 100;
-        const nx = x * perlinFreqScaled * 0.02;
-        const ny = y * perlinFreqScaled * 0.02;
+        const nx = x * perlinFreqScaled * 0.02 + noiseOX;
+        const ny = y * perlinFreqScaled * 0.02 + noiseOY;
         const perlinValue = perlin2(nx, ny);
         angleChange += (particlePerlinAmp / 100) * perlinValue * 0.5;
       }
@@ -1193,6 +1213,10 @@ export function buildGenerativeParticlesSvg(width, height, imageData, options = 
   const stepSize = 2 * dpr;
   const neighborRadius = 30 * dpr;
 
+  const noiseOX = (options.seed ?? 0) * 13.7 + (options.time ?? 0) * 0.1;
+  const noiseOY = (options.seed ?? 0) * 7.3;
+  const seedBase = (options.seed ?? 0) * 99991 + Math.floor((options.time ?? 0) * 1000);
+
   const cellSize = Math.max(4, 6 * dpr);
   const gridW = Math.ceil(width / cellSize);
   const gridH = Math.ceil(height / cellSize);
@@ -1215,9 +1239,9 @@ export function buildGenerativeParticlesSvg(width, height, imageData, options = 
   const particles = [];
   for (let p = 0; p < initialCount; p++) {
     particles.push({
-      x: seededRand(p * 1234) * width,
-      y: seededRand(p * 5678) * height,
-      angle: seededRand(p * 9012) * Math.PI * 2 + rotationRad,
+      x: seededRand(p * 1234, seedBase) * width,
+      y: seededRand(p * 5678, seedBase) * height,
+      angle: seededRand(p * 9012, seedBase) * Math.PI * 2 + rotationRad,
       active: true,
       stepsWithoutContent: 0,
       path: [],
@@ -1228,7 +1252,7 @@ export function buildGenerativeParticlesSvg(width, height, imageData, options = 
   // Simulate all particles
   for (let step = 0; step < maxStepsSvg; step++) {
     if (spawnMode === 'drip' && step > 0 && step % spawnInterval === 0 && particles.length < maxParticles) {
-      particles.push(spawnParticleOnContent(data, width, height, bgRgb, maskOn, rotationRad, step * 9999));
+      particles.push(spawnParticleOnContent(data, width, height, bgRgb, maskOn, rotationRad, step * 9999, seedBase));
     }
     const toSpawn = [];
     let anyActive = false;
@@ -1262,8 +1286,8 @@ export function buildGenerativeParticlesSvg(width, height, imageData, options = 
         let pathX = x;
         let pathY = y;
         if (particleGrain > 0) {
-          const grainNoiseX = (seededRand(p * 7777 + step * 3333) - 0.5) * 2;
-          const grainNoiseY = (seededRand(p * 8888 + step * 4444) - 0.5) * 2;
+          const grainNoiseX = (seededRand(p * 7777 + step * 3333, seedBase) - 0.5) * 2;
+          const grainNoiseY = (seededRand(p * 8888 + step * 4444, seedBase) - 0.5) * 2;
           pathX += grainNoiseX * (particleGrain / 100) * dpr * 2;
           pathY += grainNoiseY * (particleGrain / 100) * dpr * 2;
         }
@@ -1289,8 +1313,8 @@ export function buildGenerativeParticlesSvg(width, height, imageData, options = 
       // Perlin noise
       if (particlePerlinAmp > 0) {
         const perlinFreqScaled = particlePerlinFreq / 100;
-        const nx = x * perlinFreqScaled * 0.02;
-        const ny = y * perlinFreqScaled * 0.02;
+        const nx = x * perlinFreqScaled * 0.02 + noiseOX;
+        const ny = y * perlinFreqScaled * 0.02 + noiseOY;
         const perlinValue = perlin2(nx, ny);
         angleChange += (particlePerlinAmp / 100) * perlinValue * 0.5;
       }
@@ -1448,7 +1472,7 @@ export function applyGenerativeTopomap(ctx, width, height, imageData, options = 
   ctx.fillStyle = backgroundColor;
   ctx.fillRect(0, 0, width, height);
   ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = dpr;
+  ctx.lineWidth = (options.lineWidth ?? 1) * dpr;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
@@ -1727,7 +1751,7 @@ export function applyGenerativeSpiral(ctx, width, height, imageData, options = {
   ctx.fillStyle = backgroundColor;
   ctx.fillRect(0, 0, width, height);
   ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = dpr;
+  ctx.lineWidth = (options.lineWidth ?? 1) * dpr;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
@@ -1953,7 +1977,11 @@ export function applyGenerativeSpirals(ctx, width, height, imageData, options = 
     centerX = 0.5,
     centerY = 0.5,
   } = options;
-  
+
+  const noiseOX = (options.seed ?? 0) * 13.7 + (options.time ?? 0) * 0.1;
+  const noiseOY = (options.seed ?? 0) * 7.3;
+  const seedBase = (options.seed ?? 0) * 99991 + Math.floor((options.time ?? 0) * 1000);
+
   // Global tilt center point
   const globalCenterX = width * centerX;
   const globalCenterY = height * centerY;
@@ -1964,7 +1992,7 @@ export function applyGenerativeSpirals(ctx, width, height, imageData, options = 
   ctx.fillStyle = backgroundColor;
   ctx.fillRect(0, 0, width, height);
   ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = dpr;
+  ctx.lineWidth = (options.lineWidth ?? 1) * dpr;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
@@ -1982,11 +2010,11 @@ export function applyGenerativeSpirals(ctx, width, height, imageData, options = 
   // Keep trying to place spirals until we have enough or run out of attempts
   while (placedSpirals < numSpirals && attemptIndex < maxAttempts) {
     // Random center position using attempt index for variety
-    const cx = seededRand(attemptIndex * 1357 + 111) * width;
-    const cy = seededRand(attemptIndex * 2468 + 222) * height;
-    
+    const cx = seededRand(attemptIndex * 1357 + 111, seedBase) * width;
+    const cy = seededRand(attemptIndex * 2468 + 222, seedBase) * height;
+
     attemptIndex++;
-    
+
     // Check if this center point is already covered by a previous spiral
     const centerX = Math.floor(cx);
     const centerY = Math.floor(cy);
@@ -1996,7 +2024,7 @@ export function applyGenerativeSpirals(ctx, width, height, imageData, options = 
         // Center is outside content area, try next position
         continue;
       }
-      
+
       if (maskData[centerY * width + centerX] > 0) {
         // Center is already covered, try next position
         continue;
@@ -2005,7 +2033,7 @@ export function applyGenerativeSpirals(ctx, width, height, imageData, options = 
       // Out of bounds
       continue;
     }
-    
+
     // Calculate max radius for this spiral based on size and variance
     const maxDistToEdge = Math.min(
       Math.hypot(cx, cy),
@@ -2013,17 +2041,17 @@ export function applyGenerativeSpirals(ctx, width, height, imageData, options = 
       Math.hypot(cx, height - cy),
       Math.hypot(width - cx, height - cy)
     );
-    
+
     // Apply size and variance
     const baseSizeFactor = spiralSize / 100;
     const varianceFactor = spiralSizeVariance / 100;
-    const randomVariance = (seededRand(placedSpirals * 4680 + 444) - 0.5) * 2 * varianceFactor; // -variance to +variance
+    const randomVariance = (seededRand(placedSpirals * 4680 + 444, seedBase) - 0.5) * 2 * varianceFactor; // -variance to +variance
     const sizeFactor = Math.max(0.1, Math.min(1, baseSizeFactor + randomVariance * 0.5));
     const maxRadius = maxDistToEdge * sizeFactor;
-    
+
     // Random starting angle
-    const startAngle = seededRand(placedSpirals * 3579 + 333) * Math.PI * 2;
-    
+    const startAngle = seededRand(placedSpirals * 3579 + 333, seedBase) * Math.PI * 2;
+
     // Calculate direction from global center to this spiral
     const dx = cx - globalCenterX;
     const dy = cy - globalCenterY;
@@ -2208,9 +2236,13 @@ export function buildGenerativeSpiralsSvg(width, height, imageData, options = {}
   const centerX = options.centerX ?? 0.5;
   const centerY = options.centerY ?? 0.5;
 
+  const noiseOX = (options.seed ?? 0) * 13.7 + (options.time ?? 0) * 0.1;
+  const noiseOY = (options.seed ?? 0) * 7.3;
+  const seedBase = (options.seed ?? 0) * 99991 + Math.floor((options.time ?? 0) * 1000);
+
   const data = imageData.data;
   const bgRgb = parseBgHex(backgroundColor);
-  
+
   // Global tilt center point
   const globalCenterX = width * centerX;
   const globalCenterY = height * centerY;
@@ -2231,11 +2263,11 @@ export function buildGenerativeSpiralsSvg(width, height, imageData, options = {}
   // Keep trying to place spirals until we have enough or run out of attempts
   while (placedSpirals < numSpirals && attemptIndex < maxAttempts) {
     // Random center position using attempt index for variety
-    const cx = seededRand(attemptIndex * 1357 + 111) * width;
-    const cy = seededRand(attemptIndex * 2468 + 222) * height;
-    
+    const cx = seededRand(attemptIndex * 1357 + 111, seedBase) * width;
+    const cy = seededRand(attemptIndex * 2468 + 222, seedBase) * height;
+
     attemptIndex++;
-    
+
     // Check if this center point is already covered
     const centerX = Math.floor(cx);
     const centerY = Math.floor(cy);
@@ -2245,7 +2277,7 @@ export function buildGenerativeSpiralsSvg(width, height, imageData, options = {}
         // Center is outside content area, try next position
         continue;
       }
-      
+
       if (maskData[centerY * width + centerX] > 0) {
         continue;
       }
@@ -2253,22 +2285,22 @@ export function buildGenerativeSpiralsSvg(width, height, imageData, options = {}
       // Out of bounds
       continue;
     }
-    
+
     const maxDistToEdge = Math.min(
       Math.hypot(cx, cy),
       Math.hypot(width - cx, cy),
       Math.hypot(cx, height - cy),
       Math.hypot(width - cx, height - cy)
     );
-    
+
     // Apply size and variance
     const baseSizeFactor = spiralSize / 100;
     const varianceFactor = spiralSizeVariance / 100;
-    const randomVariance = (seededRand(placedSpirals * 4680 + 444) - 0.5) * 2 * varianceFactor;
+    const randomVariance = (seededRand(placedSpirals * 4680 + 444, seedBase) - 0.5) * 2 * varianceFactor;
     const sizeFactor = Math.max(0.1, Math.min(1, baseSizeFactor + randomVariance * 0.5));
     const maxRadius = maxDistToEdge * sizeFactor;
-    
-    const startAngle = seededRand(placedSpirals * 3579 + 333) * Math.PI * 2;
+
+    const startAngle = seededRand(placedSpirals * 3579 + 333, seedBase) * Math.PI * 2;
     
     // Calculate direction from global center to this spiral
     const dx = cx - globalCenterX;

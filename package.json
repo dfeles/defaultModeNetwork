@@ -19,7 +19,8 @@
     "react-grab": "^0.0.51",
     "react-scripts": "5.0.1",
     "react-zoom-pan-pinch": "^3.7.0",
-    "three": "^0.160.0"
+    "three": "^0.160.0",
+    "tweakpane": "^4.0.5"
   },
   "scripts": {
     "start": "APP_NAME=dither craco start",

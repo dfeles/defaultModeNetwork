@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { RotateCcw, Download, FileDown, ChevronDown, ChevronRight, Eye, EyeOff, X, Play, Pause } from 'lucide-react';
+import { RotateCcw, Download, FileDown, ChevronDown, ChevronRight, Eye, EyeOff, X, Play, Pause, Zap } from 'lucide-react';
 import { ditherImageData } from './utils/webglDithering';
 import { makeOpaquePaletteOnly, applyColorAdjustments } from './utils/dithering';
 import { applyGenerativeEffect, buildGenerativeLinesSvg, buildGenerativeCirclesSvg, buildGenerativeParticlesSvg, buildGenerativeTopomapSvg, buildGenerativeSpiralSvg, buildGenerativeSpiralsSvg } from './utils/generativeEffect';
@@ -37,6 +37,23 @@ function generateRainbowColors(count) {
 }
 
 const DITHER_STORAGE_KEY = 'ditherApp_settings';
+const PRESETS_STORAGE_KEY = 'ditherApp_presets';
+
+function loadPresets() {
+  try {
+    const raw = localStorage.getItem(PRESETS_STORAGE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch { return []; }
+}
+
+function savePresets(presets) {
+  try {
+    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
+  } catch (e) {
+    console.warn('Could not save presets', e);
+  }
+}
 
 function loadDitherSettings() {
   try {
@@ -113,7 +130,7 @@ const DITHER_METHODS = [
   { value: 'ordered', label: 'Ordered (Bayer)' },
 ];
 
-function Slider({ value, onChange, min, max, step = 1, label, unit = '' }) {
+function Slider({ value, onChange, min, max, step = 1, label, unit = '', disabled = false }) {
   const [isEditingValue, setIsEditingValue] = useState(false);
   const [draftValue, setDraftValue] = useState(String(value));
   const valueInputRef = useRef(null);
@@ -145,7 +162,7 @@ function Slider({ value, onChange, min, max, step = 1, label, unit = '' }) {
   const sliderValue = Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : min;
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className={`flex flex-col gap-1 ${disabled ? 'opacity-40 pointer-events-none select-none' : ''}`}>
       <div>
         <span className="text-xs text-dither-muted-light">{label}</span>
         {isEditingValue ? (
@@ -200,6 +217,154 @@ function Slider({ value, onChange, min, max, step = 1, label, unit = '' }) {
   );
 }
 
+function AnimSlider({ animKey, value, onChange, min, max, step, label, unit, showAnim, endValue, onSetEnd, onClearEnd }) {
+  const [open, setOpen] = React.useState(false);
+  const [draftStart, setDraftStart] = React.useState('');
+  const [draftEnd, setDraftEnd] = React.useState('');
+  const [localMode, setLocalMode] = React.useState('linear');
+  const popoverRef = React.useRef(null);
+  const btnRef = React.useRef(null);
+
+  const cfg = endValue != null ? (typeof endValue === 'object' ? endValue : { mode: 'linear', end: endValue }) : null;
+  const hasEnd = cfg !== null;
+  const committedMode = cfg?.mode ?? 'linear';
+  const endVal = cfg?.end ?? value;
+
+  React.useEffect(() => {
+    if (open) {
+      setLocalMode(committedMode);
+      setDraftStart(String(value));
+      setDraftEnd(String(hasEnd ? endVal : value));
+    }
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (!popoverRef.current?.contains(e.target) && !btnRef.current?.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const commitStart = () => {
+    const v = parseFloat(draftStart);
+    if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v)));
+  };
+
+  const commitEnd = (modeOverride) => {
+    const m = modeOverride ?? localMode;
+    if (m === 'random') {
+      onSetEnd(animKey, { mode: 'random', end: max });
+      setOpen(false);
+      return;
+    }
+    const endV = parseFloat(draftEnd);
+    const startV = parseFloat(draftStart);
+    if (!Number.isFinite(endV)) return;
+    const effectiveStart = Number.isFinite(startV) ? startV : value;
+    if (endV === effectiveStart) onClearEnd(animKey);
+    else onSetEnd(animKey, { mode: m, end: endV });
+  };
+
+  const MODES = [
+    { id: 'linear', icon: '→', label: 'Linear' },
+    { id: 'pingpong', icon: '⇄', label: 'Loop' },
+    { id: 'random', icon: '⚄', label: 'Random' },
+  ];
+
+  return (
+    <div className="group/anim relative">
+      <Slider value={value} onChange={onChange} min={min} max={max} step={step} label={label} unit={unit} disabled={hasEnd} />
+      {showAnim && (
+        <button
+          ref={btnRef}
+          type="button"
+          onClick={() => setOpen(v => !v)}
+          className={`absolute right-0 top-0 w-5 h-5 flex items-center justify-center rounded transition-all cursor-pointer border-0 p-0 bg-transparent
+            ${hasEnd ? 'opacity-100 text-yellow-400' : 'opacity-0 group-hover/anim:opacity-50 text-white/60'}`}
+          title="Animate across GIF frames"
+        >
+          <Zap size={11} fill={hasEnd ? 'currentColor' : 'none'} strokeWidth={hasEnd ? 0 : 2} />
+        </button>
+      )}
+      {showAnim && open && (
+        <div
+          ref={popoverRef}
+          className="absolute right-0 top-6 z-50 bg-[#1c1c1c] border border-dither-border-light rounded-lg p-3 shadow-2xl flex flex-col gap-3 w-56"
+        >
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] text-dither-muted uppercase tracking-wider">Mode</span>
+            <div className="flex gap-1">
+              {MODES.map(m => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setLocalMode(m.id)}
+                  className={`flex-1 py-1.5 text-[10px] rounded cursor-pointer border transition-colors flex flex-col items-center gap-0.5
+                    ${localMode === m.id
+                      ? 'bg-yellow-400/15 border-yellow-400/40 text-yellow-300'
+                      : 'bg-transparent border-dither-border text-dither-muted hover:border-dither-border-light hover:text-dither-muted-light'}`}
+                >
+                  <span className="text-[12px]">{m.icon}</span>
+                  <span>{m.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {localMode === 'random' ? (
+            <>
+              <p className="text-[10px] text-dither-muted leading-relaxed">
+                Each frame picks a random value between <span className="text-dither-muted-light">{min}</span> and <span className="text-dither-muted-light">{max}</span>.
+              </p>
+              <button
+                type="button"
+                onClick={() => commitEnd('random')}
+                className="py-1.5 text-[11px] bg-yellow-400/15 border border-yellow-400/40 text-yellow-300 rounded cursor-pointer hover:bg-yellow-400/25 transition-colors"
+              >{hasEnd && committedMode === 'random' ? 'Active' : 'Enable'}</button>
+            </>
+          ) : (
+            <div className="flex gap-2">
+              <div className="flex flex-col gap-1 flex-1 min-w-0">
+                <span className="text-[10px] text-dither-muted uppercase tracking-wider">Start</span>
+                <input
+                  type="number"
+                  value={draftStart}
+                  onChange={e => setDraftStart(e.target.value)}
+                  onBlur={commitStart}
+                  onKeyDown={e => { if (e.key === 'Enter') commitStart(); if (e.key === 'Escape') setOpen(false); }}
+                  className="w-full px-2 py-1 text-[11px] text-dither-text bg-[#111] border border-dither-border-active rounded outline-none focus:border-yellow-400/60"
+                />
+              </div>
+              <div className="flex flex-col gap-1 flex-1 min-w-0">
+                <span className="text-[10px] text-dither-muted uppercase tracking-wider">End</span>
+                <input
+                  type="number"
+                  value={draftEnd}
+                  onChange={e => setDraftEnd(e.target.value)}
+                  onBlur={() => commitEnd()}
+                  onKeyDown={e => { if (e.key === 'Enter') { commitEnd(); setOpen(false); } if (e.key === 'Escape') setOpen(false); }}
+                  className="w-full px-2 py-1 text-[11px] text-dither-text bg-[#111] border border-dither-border-active rounded outline-none focus:border-yellow-400/60"
+                  autoFocus
+                />
+              </div>
+            </div>
+          )}
+
+          {hasEnd && (
+            <button
+              type="button"
+              onClick={() => { onClearEnd(animKey); setOpen(false); }}
+              className="text-[10px] text-dither-muted hover:text-red-400 cursor-pointer bg-transparent border-0 p-0 text-left transition-colors"
+            >× Clear animation</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AppDither() {
   const [imageFile, setImageFile] = useState(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
@@ -232,7 +397,10 @@ export default function AppDither() {
   const [gifFrameIndex, setGifFrameIndex] = useState(0);
   const [isGifPlaying, setIsGifPlaying] = useState(false);
   const gifPlaySpeed = 8;
-  const [transparentBg, setTransparentBg] = useState(false);
+  const [removeBg, setRemoveBg] = useState(false);
+  const [removeBgThreshold, setRemoveBgThreshold] = useState(10);
+  const [keepFg, setKeepFg] = useState(false);
+  const [keepFgThreshold, setKeepFgThreshold] = useState(10);
   const [accentColor, setAccentColor] = useState('#000000'); // line/circle/dither stroke; sampled from image on load
   const [applyGenerative, setApplyGenerative] = useState(false);
   const [generativeMode, setGenerativeMode] = useState('lines'); // 'lines' | 'circles'
@@ -276,6 +444,8 @@ export default function AppDither() {
   const [generativeSpiralSize, setGenerativeSpiralSize] = useState(50); // 1-100 for spirals
   const [generativeSpiralSizeVariance, setGenerativeSpiralSizeVariance] = useState(50); // 0-100 for spirals
   const [generativeSpiralDepthMask, setGenerativeSpiralDepthMask] = useState(true); // Hide back side of sphere
+  const [generativeSeed, setGenerativeSeed] = useState(0);
+  const [generativeTime, setGenerativeTime] = useState(0);
   const [isPickingCenter, setIsPickingCenter] = useState(false);
   const [isGeneratingSvg, setIsGeneratingSvg] = useState(false);
   const [page, setPage] = useState('dither'); // 'dither' | 'animate'
@@ -291,6 +461,11 @@ export default function AppDither() {
   const [animateKentos, setAnimateKentos] = useState([]); // { id, corner, type, svgUrl }
   const [layers, setLayers] = useState([]); // { id, name, imageFile, imagePreviewUrl, svgUrl, svg, visible, settings }
   const [activeLayerId, setActiveLayerId] = useState(null);
+  const [presets, setPresets] = useState(() => loadPresets());
+  const [presetNameDraft, setPresetNameDraft] = useState('');
+  const [canvasZoom, setCanvasZoom] = useState('fit'); // 'fit' | number (scale relative to fit size)
+  const [zoomDraft, setZoomDraft] = useState(null); // null = not editing, string = draft value
+  const [strokeDraft, setStrokeDraft] = useState(null);
   const cancelRef = useRef(false);
   const imgRef = useRef(null);
   const processedImgRef = useRef(null);
@@ -299,6 +474,11 @@ export default function AppDither() {
   const layersRef = useRef([]);
   const skipAccentSampleRef = useRef(false);
   const [imageDisplayRect, setImageDisplayRect] = useState(null); // { left, top, width, height } for overlay alignment
+  const [animatedParams, setAnimatedParams] = useState({});
+  const frameOverridesRef = useRef(null);
+
+  const setEndValue = useCallback((key, config) => setAnimatedParams(prev => ({ ...prev, [key]: config })), []);
+  const clearEndValue = useCallback((key) => setAnimatedParams(prev => { const n = { ...prev }; delete n[key]; return n; }), []);
 
   // Load default image on mount (ref guard prevents StrictMode double-fire)
   const defaultImageLoadedRef = useRef(false);
@@ -343,7 +523,12 @@ export default function AppDither() {
     if (s.renderBackground != null) setRenderBackground(s.renderBackground);
     if (s.exportTransparentStrokeOnly != null) setExportTransparentStrokeOnly(s.exportTransparentStrokeOnly);
     if (s.accentColor != null) setAccentColor(s.accentColor);
-    if (s.transparentBg != null) setTransparentBg(s.transparentBg);
+    if (s.removeBg != null) setRemoveBg(s.removeBg);
+    if (s.removeBgThreshold != null) setRemoveBgThreshold(s.removeBgThreshold);
+    if (s.keepFg != null) setKeepFg(s.keepFg);
+    if (s.keepFgThreshold != null) setKeepFgThreshold(s.keepFgThreshold);
+    // migrate old save
+    if (s.transparentBg != null && s.removeBg == null) setRemoveBg(s.transparentBg);
     if (s.strokeColor !== undefined) setStrokeColor(s.strokeColor);
     if (s.strokeWidth != null) setStrokeWidth(s.strokeWidth);
     if (s.pixelScale != null) setPixelScale(s.pixelScale);
@@ -394,6 +579,8 @@ export default function AppDither() {
     if (s.generativeSpiralSize != null) setGenerativeSpiralSize(s.generativeSpiralSize);
     if (s.generativeSpiralSizeVariance != null) setGenerativeSpiralSizeVariance(s.generativeSpiralSizeVariance);
     if (s.generativeSpiralDepthMask != null) setGenerativeSpiralDepthMask(s.generativeSpiralDepthMask);
+    if (s.generativeSeed != null) setGenerativeSeed(s.generativeSeed);
+    if (s.generativeTime != null) setGenerativeTime(s.generativeTime);
     if (s.generativeAmplitude != null && s.generativePerlinAmplitude == null) setGenerativePerlinAmplitude(s.generativeAmplitude);
     if (s.page != null) setPage(s.page);
     if (s.animateGridEnabled != null) setAnimateGridEnabled(s.animateGridEnabled);
@@ -436,7 +623,7 @@ export default function AppDither() {
       pixelScale,
       pixelShape,
       canvasBgColor,
-      transparentBg,
+      removeBg, removeBgThreshold, keepFg, keepFgThreshold,
       applyGenerative,
       generativeMode,
       generativeDensity,
@@ -479,6 +666,8 @@ export default function AppDither() {
       generativeSpiralSize,
       generativeSpiralSizeVariance,
       generativeSpiralDepthMask,
+      generativeSeed,
+      generativeTime,
       page,
       animateGridEnabled,
       animateGridCols,
@@ -512,7 +701,7 @@ export default function AppDither() {
     pixelScale,
     pixelShape,
     canvasBgColor,
-    transparentBg,
+    removeBg, removeBgThreshold, keepFg, keepFgThreshold,
     applyGenerative,
     generativeMode,
     generativeDensity,
@@ -563,6 +752,122 @@ export default function AppDither() {
     animateKentos,
   ]);
 
+  // Persist presets whenever they change
+  useEffect(() => { savePresets(presets); }, [presets]);
+
+  const saveCurrentAsPreset = useCallback(() => {
+    const name = presetNameDraft.trim();
+    if (!name) return;
+    const settings = loadDitherSettings();
+    if (!settings) return;
+    setPresets(prev => [...prev, { id: Date.now(), name, settings }]);
+    setPresetNameDraft('');
+  }, [presetNameDraft]);
+
+  const applySettings = useCallback((s) => {
+    if (s.applyDithering != null) setApplyDithering(s.applyDithering);
+    if (s.method != null) setMethod(s.method);
+    if (s.resolution != null) setResolution(s.resolution);
+    if (s.threshold != null) setThreshold(s.threshold);
+    if (s.contrast != null) setContrast(s.contrast);
+    if (s.brightness != null) setBrightness(s.brightness);
+    if (s.levelsBlack != null) setLevelsBlack(s.levelsBlack);
+    if (s.levelsWhite != null) setLevelsWhite(s.levelsWhite);
+    if (s.levelsGamma != null) setLevelsGamma(s.levelsGamma);
+    if (s.usePalette != null) setUsePalette(s.usePalette);
+    if (s.paletteCount != null) setPaletteCount(s.paletteCount);
+    if (s.colorPalette != null && Array.isArray(s.colorPalette)) setColorPalette(s.colorPalette);
+    if (s.exportOpen != null) setExportOpen(s.exportOpen);
+    if (s.exportFormat != null) setExportFormat(s.exportFormat);
+    if (s.exportMode != null) setExportMode(s.exportMode);
+    if (s.renderBackground != null) setRenderBackground(s.renderBackground);
+    if (s.exportTransparentStrokeOnly != null) setExportTransparentStrokeOnly(s.exportTransparentStrokeOnly);
+    if (s.accentColor != null) setAccentColor(s.accentColor);
+    if (s.removeBg != null) setRemoveBg(s.removeBg);
+    if (s.removeBgThreshold != null) setRemoveBgThreshold(s.removeBgThreshold);
+    if (s.keepFg != null) setKeepFg(s.keepFg);
+    if (s.keepFgThreshold != null) setKeepFgThreshold(s.keepFgThreshold);
+    if (s.strokeColor !== undefined) setStrokeColor(s.strokeColor);
+    if (s.strokeWidth != null) setStrokeWidth(s.strokeWidth);
+    if (s.pixelScale != null) setPixelScale(s.pixelScale);
+    if (s.pixelShape != null) setPixelShape(s.pixelShape);
+    if (s.canvasBgColor != null) setCanvasBgColor(s.canvasBgColor);
+    if (s.applyGenerative != null) setApplyGenerative(s.applyGenerative);
+    if (s.generativeMode != null) setGenerativeMode(s.generativeMode);
+    if (s.generativeDensity != null) setGenerativeDensity(s.generativeDensity);
+    if (s.generativeRegularity != null) setGenerativeRegularity(s.generativeRegularity);
+    if (s.generativeDislocate != null) setGenerativeDislocate(s.generativeDislocate);
+    if (s.generativeNoiseAmplitude != null) setGenerativeNoiseAmplitude(s.generativeNoiseAmplitude);
+    if (s.generativeNoiseFrequency != null) setGenerativeNoiseFrequency(s.generativeNoiseFrequency);
+    if (s.generativePerlinAmplitude != null) setGenerativePerlinAmplitude(s.generativePerlinAmplitude);
+    if (s.generativePerlinFrequency != null) setGenerativePerlinFrequency(s.generativePerlinFrequency);
+    if (s.generativeSineAmplitude != null) setGenerativeSineAmplitude(s.generativeSineAmplitude);
+    if (s.generativeSineFrequency != null) setGenerativeSineFrequency(s.generativeSineFrequency);
+    if (s.generativeMaskOn != null) setGenerativeMaskOn(s.generativeMaskOn);
+    if (s.generativeMaskCoveringLines != null) setGenerativeMaskCoveringLines(s.generativeMaskCoveringLines);
+    if (s.generativeMaskCoverPadding != null) setGenerativeMaskCoverPadding(s.generativeMaskCoverPadding);
+    if (s.generativeRotation != null) setGenerativeRotation(s.generativeRotation);
+    if (s.generativeCenterX != null) setGenerativeCenterX(s.generativeCenterX);
+    if (s.generativeCenterY != null) setGenerativeCenterY(s.generativeCenterY);
+    if (s.generativeLinesPerspective != null) setGenerativeLinesPerspective(s.generativeLinesPerspective);
+    if (s.generativeRenderBackground != null) setGenerativeRenderBackground(s.generativeRenderBackground);
+    if (s.generativeParticleTilt != null) setGenerativeParticleTilt(s.generativeParticleTilt);
+    if (s.generativeParticleGrain != null) setGenerativeParticleGrain(s.generativeParticleGrain);
+    if (s.generativeParticleRotation != null) setGenerativeParticleRotation(s.generativeParticleRotation);
+    if (s.generativeParticleSmoothness != null) setGenerativeParticleSmoothness(s.generativeParticleSmoothness);
+    if (s.generativeParticleWindX != null) setGenerativeParticleWindX(s.generativeParticleWindX);
+    if (s.generativeParticleWindY != null) setGenerativeParticleWindY(s.generativeParticleWindY);
+    if (s.generativeParticlePerlinAmp != null) setGenerativeParticlePerlinAmp(s.generativeParticlePerlinAmp);
+    if (s.generativeParticlePerlinFreq != null) setGenerativeParticlePerlinFreq(s.generativeParticlePerlinFreq);
+    if (s.generativeSeparation != null) setGenerativeSeparation(s.generativeSeparation);
+    if (s.generativeCohesion != null) setGenerativeCohesion(s.generativeCohesion);
+    if (s.generativeAlignment != null) setGenerativeAlignment(s.generativeAlignment);
+    if (s.generativeAvoidLines != null) setGenerativeAvoidLines(s.generativeAvoidLines);
+    if (s.generativeSimulationLength != null) setGenerativeSimulationLength(s.generativeSimulationLength);
+    if (s.generativeParticleLifetime != null) setGenerativeParticleLifetime(s.generativeParticleLifetime);
+    if (s.generativeSpawnMode != null) setGenerativeSpawnMode(s.generativeSpawnMode);
+    if (s.generativeSpawnInterval != null) setGenerativeSpawnInterval(s.generativeSpawnInterval);
+    if (s.generativeMaxParticles != null) setGenerativeMaxParticles(s.generativeMaxParticles);
+    if (s.generativeTopomapSmoothness != null) setGenerativeTopomapSmoothness(s.generativeTopomapSmoothness);
+    if (s.generativeSpiralDent != null) setGenerativeSpiralDent(s.generativeSpiralDent);
+    if (s.generativeSpiralTurns != null) setGenerativeSpiralTurns(s.generativeSpiralTurns);
+    if (s.generativeSpiralSize != null) setGenerativeSpiralSize(s.generativeSpiralSize);
+    if (s.generativeSpiralSizeVariance != null) setGenerativeSpiralSizeVariance(s.generativeSpiralSizeVariance);
+    if (s.generativeSpiralDepthMask != null) setGenerativeSpiralDepthMask(s.generativeSpiralDepthMask);
+    if (s.generativeSeed != null) setGenerativeSeed(s.generativeSeed);
+    if (s.generativeTime != null) setGenerativeTime(s.generativeTime);
+    if (s.page != null) setPage(s.page);
+    if (s.animateGridEnabled != null) setAnimateGridEnabled(s.animateGridEnabled);
+    if (s.animateGridCols != null) setAnimateGridCols(s.animateGridCols);
+    if (s.animateGridRows != null) setAnimateGridRows(s.animateGridRows);
+    if (s.animateGridPadding != null) setAnimateGridPadding(s.animateGridPadding);
+    if (s.animateGridMargin != null) setAnimateGridMargin(s.animateGridMargin);
+    if (s.animateGridReverse != null) setAnimateGridReverse(s.animateGridReverse);
+    if (Array.isArray(s.animateKentos)) setAnimateKentos(s.animateKentos.map((k) => ({ ...k, svgUrl: null })));
+  }, []);
+
+  const ZOOM_STEPS = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+
+  const zoomIn = useCallback(() => {
+    setCanvasZoom(prev => {
+      const current = prev === 'fit' ? 1 : prev;
+      return ZOOM_STEPS.find(s => s > current) ?? ZOOM_STEPS[ZOOM_STEPS.length - 1];
+    });
+  }, []);
+
+  const zoomOut = useCallback(() => {
+    setCanvasZoom(prev => {
+      const current = prev === 'fit' ? 1 : prev;
+      return [...ZOOM_STEPS].reverse().find(s => s < current) ?? ZOOM_STEPS[0];
+    });
+  }, []);
+
+  const zoomToOriginal = useCallback(() => {
+    const img = processedImgRef.current ?? imgRef.current;
+    if (!img || !img.naturalWidth || !img.width) { setCanvasZoom(1); return; }
+    setCanvasZoom(img.naturalWidth / img.width);
+  }, []);
+
   // Keep palette in sync with count
   useEffect(() => {
     if (paletteCount === 2) {
@@ -574,6 +879,17 @@ export default function AppDither() {
 
   const runDither = useCallback(async (file, imgElement, forSvgExport = false) => {
     if (!file || !imgElement) return forSvgExport ? null : undefined;
+
+    // Resolve animated parameter overrides for current GIF frame
+    const _o = frameOverridesRef.current ?? {};
+    const _resolution = Math.max(1, Math.round(_o.resolution ?? resolution));
+    const _threshold = _o.threshold ?? threshold;
+    const _contrast = _o.contrast ?? contrast;
+    const _brightness = _o.brightness ?? brightness;
+    const _levelsBlack = _o.levelsBlack ?? levelsBlack;
+    const _levelsWhite = _o.levelsWhite ?? levelsWhite;
+    const _levelsGamma = _o.levelsGamma ?? levelsGamma;
+
     if (forSvgExport) cancelRef.current = false;
     else {
       cancelRef.current = false;
@@ -585,13 +901,13 @@ export default function AppDither() {
     const h = imgElement.naturalHeight || imgElement.height;
     let processW = w;
     let processH = h;
-    if (w > resolution || h > resolution) {
+    if (w > _resolution || h > _resolution) {
       if (w > h) {
-        processW = resolution;
-        processH = Math.round(h * (resolution / w));
+        processW = _resolution;
+        processH = Math.round(h * (_resolution / w));
       } else {
-        processH = resolution;
-        processW = Math.round(w * (resolution / h));
+        processH = _resolution;
+        processW = Math.round(w * (_resolution / h));
       }
     }
 
@@ -618,15 +934,15 @@ export default function AppDither() {
         const palette = (usePalette && colorPalette.length > 0) ? colorPalette : ['#000000', '#ffffff'];
         const colorCount = palette.length;
         const dithered = await ditherImageData(canvas, {
-          resolution,
-          threshold,
-          contrast,
-          brightness,
+          resolution: _resolution,
+          threshold: _threshold,
+          contrast: _contrast,
+          brightness: _brightness,
           colorCount,
           colorPalette: palette.length > 0 ? palette : null,
-          levelsBlack,
-          levelsWhite,
-          levelsGamma,
+          levelsBlack: _levelsBlack,
+          levelsWhite: _levelsWhite,
+          levelsGamma: _levelsGamma,
           method,
         });
         if (cancelRef.current) return;
@@ -634,7 +950,7 @@ export default function AppDither() {
         ctx.putImageData(opaquePalette, 0, 0);
       } else {
         const imageData = ctx.getImageData(0, 0, processW, processH);
-        const colorOnly = applyColorAdjustments(imageData, contrast, brightness, levelsBlack, levelsWhite, levelsGamma);
+        const colorOnly = applyColorAdjustments(imageData, _contrast, _brightness, _levelsBlack, _levelsWhite, _levelsGamma);
         for (let i = 3; i < colorOnly.data.length; i += 4) colorOnly.data[i] = originalImageData.data[i];
         ctx.putImageData(colorOnly, 0, 0);
       }
@@ -654,7 +970,22 @@ export default function AppDither() {
         const bgColor = canvasBgColor;
         const strokeStyle = accentColor || (isLightColor(canvasBgColor) ? '#000000' : '#ffffff');
         if (forSvgExport) {
-          return { width: outW, height: outH, imageData, backgroundColor: bgColor, strokeStyle };
+          if (removeBg || keepFg) {
+            const d = imageData.data;
+            if (removeBg) {
+              const br = parseInt(bgColor.slice(1,3),16), bg2 = parseInt(bgColor.slice(3,5),16), bb = parseInt(bgColor.slice(5,7),16);
+              const t = removeBgThreshold;
+              for (let i=0; i<d.length; i+=4)
+                if (Math.abs(d[i]-br)<=t && Math.abs(d[i+1]-bg2)<=t && Math.abs(d[i+2]-bb)<=t) d[i+3]=0;
+            }
+            if (keepFg) {
+              const fr = parseInt(accentColor.slice(1,3),16), fg2 = parseInt(accentColor.slice(3,5),16), fb = parseInt(accentColor.slice(5,7),16);
+              const t = keepFgThreshold;
+              for (let i=0; i<d.length; i+=4)
+                if (d[i+3]>0 && !(Math.abs(d[i]-fr)<=t && Math.abs(d[i+1]-fg2)<=t && Math.abs(d[i+2]-fb)<=t)) d[i+3]=0;
+            }
+          }
+          return { width: outW, height: outH, imageData, backgroundColor: (removeBg||keepFg) ? 'none' : bgColor, strokeStyle };
         }
         applyGenerativeEffect(rCtx, outW, outH, imageData, generativeMode || 'lines', {
           backgroundColor: bgColor,
@@ -699,22 +1030,40 @@ export default function AppDither() {
           spiralSize: generativeSpiralSize,
           spiralSizeVariance: generativeSpiralSizeVariance,
           spiralDepthMask: generativeSpiralDepthMask,
+          seed: generativeSeed,
+          time: generativeTime,
+          lineWidth: strokeWidth,
+          ..._o,
         });
         outputCanvas = retinaCanvas;
       }
       if (forSvgExport) return null;
-      if (transparentBg) {
-        const bgHex = canvasBgColor;
-        const br = parseInt(bgHex.slice(1, 3), 16);
-        const bg = parseInt(bgHex.slice(3, 5), 16);
-        const bb = parseInt(bgHex.slice(5, 7), 16);
-        const tolerance = 10;
+      if (removeBg || keepFg) {
         const tCtx = outputCanvas.getContext('2d');
         const id = tCtx.getImageData(0, 0, outputCanvas.width, outputCanvas.height);
         const d = id.data;
-        for (let i = 0; i < d.length; i += 4) {
-          if (Math.abs(d[i] - br) <= tolerance && Math.abs(d[i+1] - bg) <= tolerance && Math.abs(d[i+2] - bb) <= tolerance) {
-            d[i+3] = 0;
+        if (removeBg) {
+          const bgHex = canvasBgColor;
+          const br = parseInt(bgHex.slice(1, 3), 16);
+          const bg = parseInt(bgHex.slice(3, 5), 16);
+          const bb = parseInt(bgHex.slice(5, 7), 16);
+          const t = removeBgThreshold;
+          for (let i = 0; i < d.length; i += 4) {
+            if (Math.abs(d[i] - br) <= t && Math.abs(d[i+1] - bg) <= t && Math.abs(d[i+2] - bb) <= t) {
+              d[i+3] = 0;
+            }
+          }
+        }
+        if (keepFg) {
+          const fgHex = accentColor;
+          const fr = parseInt(fgHex.slice(1, 3), 16);
+          const fg = parseInt(fgHex.slice(3, 5), 16);
+          const fb = parseInt(fgHex.slice(5, 7), 16);
+          const t = keepFgThreshold;
+          for (let i = 0; i < d.length; i += 4) {
+            if (d[i+3] > 0 && !(Math.abs(d[i] - fr) <= t && Math.abs(d[i+1] - fg) <= t && Math.abs(d[i+2] - fb) <= t)) {
+              d[i+3] = 0;
+            }
           }
         }
         tCtx.putImageData(id, 0, 0);
@@ -727,7 +1076,7 @@ export default function AppDither() {
     } finally {
       if (!forSvgExport) setIsProcessing(false);
     }
-  }, [applyDithering, applyGenerative, generativeMode, generativeDensity, generativeRegularity, generativeDislocate, generativeNoiseAmplitude, generativeNoiseFrequency, generativePerlinAmplitude, generativePerlinFrequency, generativeSineAmplitude, generativeSineFrequency, generativeMaskOn, generativeMaskCoveringLines, generativeMaskCoverPadding, generativeRotation, generativeCenterX, generativeCenterY, generativeLinesPerspective, generativeParticleTilt, generativeParticleGrain, generativeParticleRotation, generativeParticleSmoothness, generativeParticleWindX, generativeParticleWindY, generativeParticlePerlinAmp, generativeParticlePerlinFreq, generativeSeparation, generativeCohesion, generativeAlignment, generativeAvoidLines, generativeSimulationLength, generativeParticleLifetime, generativeSpawnMode, generativeSpawnInterval, generativeMaxParticles, generativeTopomapSmoothness, generativeSpiralDent, generativeSpiralTurns, generativeSpiralSize, generativeSpiralSizeVariance, generativeSpiralDepthMask, resolution, threshold, contrast, brightness, levelsBlack, levelsWhite, levelsGamma, method, usePalette, colorPalette, canvasBgColor, transparentBg, accentColor]);
+  }, [applyDithering, applyGenerative, generativeMode, generativeDensity, generativeRegularity, generativeDislocate, generativeNoiseAmplitude, generativeNoiseFrequency, generativePerlinAmplitude, generativePerlinFrequency, generativeSineAmplitude, generativeSineFrequency, generativeMaskOn, generativeMaskCoveringLines, generativeMaskCoverPadding, generativeRotation, generativeCenterX, generativeCenterY, generativeLinesPerspective, generativeParticleTilt, generativeParticleGrain, generativeParticleRotation, generativeParticleSmoothness, generativeParticleWindX, generativeParticleWindY, generativeParticlePerlinAmp, generativeParticlePerlinFreq, generativeSeparation, generativeCohesion, generativeAlignment, generativeAvoidLines, generativeSimulationLength, generativeParticleLifetime, generativeSpawnMode, generativeSpawnInterval, generativeMaxParticles, generativeTopomapSmoothness, generativeSpiralDent, generativeSpiralTurns, generativeSpiralSize, generativeSpiralSizeVariance, generativeSpiralDepthMask, generativeSeed, generativeTime, resolution, threshold, contrast, brightness, levelsBlack, levelsWhite, levelsGamma, method, usePalette, colorPalette, canvasBgColor, removeBg, removeBgThreshold, keepFg, keepFgThreshold, accentColor]);
 
   // When image loads or settings change, recompute dithered preview (short debounce for live updates while dragging)
   useEffect(() => {
@@ -744,13 +1093,13 @@ export default function AppDither() {
       runDither(imageFile, img);
     }, 40);
     return () => clearTimeout(t);
-  }, [imageFile, applyDithering, applyGenerative, generativeMode, generativeDensity, generativeRegularity, generativeDislocate, generativeNoiseAmplitude, generativeNoiseFrequency, generativePerlinAmplitude, generativePerlinFrequency, generativeSineAmplitude, generativeSineFrequency, generativeMaskOn, generativeMaskCoveringLines, generativeMaskCoverPadding, generativeRotation, generativeCenterX, generativeCenterY, generativeLinesPerspective, generativeParticleTilt, generativeParticleGrain, generativeParticleRotation, generativeParticleSmoothness, generativeParticleWindX, generativeParticleWindY, generativeParticlePerlinAmp, generativeParticlePerlinFreq, generativeSeparation, generativeCohesion, generativeAlignment, generativeAvoidLines, generativeSimulationLength, generativeParticleLifetime, generativeSpawnMode, generativeSpawnInterval, generativeMaxParticles, generativeTopomapSmoothness, generativeSpiralDent, generativeSpiralTurns, generativeSpiralSize, generativeSpiralSizeVariance, generativeSpiralDepthMask, method, resolution, threshold, contrast, brightness, levelsBlack, levelsWhite, levelsGamma, usePalette, colorPalette, canvasBgColor, runDither]);
+  }, [imageFile, applyDithering, applyGenerative, generativeMode, generativeDensity, generativeRegularity, generativeDislocate, generativeNoiseAmplitude, generativeNoiseFrequency, generativePerlinAmplitude, generativePerlinFrequency, generativeSineAmplitude, generativeSineFrequency, generativeMaskOn, generativeMaskCoveringLines, generativeMaskCoverPadding, generativeRotation, generativeCenterX, generativeCenterY, generativeLinesPerspective, generativeParticleTilt, generativeParticleGrain, generativeParticleRotation, generativeParticleSmoothness, generativeParticleWindX, generativeParticleWindY, generativeParticlePerlinAmp, generativeParticlePerlinFreq, generativeSeparation, generativeCohesion, generativeAlignment, generativeAvoidLines, generativeSimulationLength, generativeParticleLifetime, generativeSpawnMode, generativeSpawnInterval, generativeMaxParticles, generativeTopomapSmoothness, generativeSpiralDent, generativeSpiralTurns, generativeSpiralSize, generativeSpiralSizeVariance, generativeSpiralDepthMask, generativeSeed, generativeTime, method, resolution, threshold, contrast, brightness, levelsBlack, levelsWhite, levelsGamma, usePalette, colorPalette, canvasBgColor, removeBg, removeBgThreshold, keepFg, keepFgThreshold, accentColor, runDither]);
 
   const getCurrentSettings = () => ({
     applyDithering, method, resolution, threshold, contrast, brightness,
     levelsBlack, levelsWhite, levelsGamma, usePalette, paletteCount, colorPalette,
     exportOpen, exportFormat, exportMode, renderBackground, exportTransparentStrokeOnly,
-    accentColor, strokeColor, strokeWidth, pixelScale, pixelShape, canvasBgColor, transparentBg,
+    accentColor, strokeColor, strokeWidth, pixelScale, pixelShape, canvasBgColor, removeBg, removeBgThreshold, keepFg, keepFgThreshold,
     applyGenerative, generativeMode, generativeDensity, generativeRegularity,
     generativeDislocate, generativeNoiseAmplitude, generativeNoiseFrequency,
     generativePerlinAmplitude, generativePerlinFrequency, generativeSineAmplitude,
@@ -764,7 +1113,7 @@ export default function AppDither() {
     generativeParticleLifetime, generativeSpawnMode, generativeSpawnInterval,
     generativeMaxParticles, generativeTopomapSmoothness, generativeSpiralDent,
     generativeSpiralTurns, generativeSpiralSize, generativeSpiralSizeVariance,
-    generativeSpiralDepthMask,
+    generativeSpiralDepthMask, generativeSeed, generativeTime,
   });
 
   const applyLayerSettings = (s) => {
@@ -833,6 +1182,8 @@ export default function AppDither() {
     if (s.generativeSpiralSize != null) setGenerativeSpiralSize(s.generativeSpiralSize);
     if (s.generativeSpiralSizeVariance != null) setGenerativeSpiralSizeVariance(s.generativeSpiralSizeVariance);
     if (s.generativeSpiralDepthMask != null) setGenerativeSpiralDepthMask(s.generativeSpiralDepthMask);
+    if (s.generativeSeed != null) setGenerativeSeed(s.generativeSeed);
+    if (s.generativeTime != null) setGenerativeTime(s.generativeTime);
   };
 
   const switchToLayer = (id) => {
@@ -893,7 +1244,47 @@ export default function AppDither() {
     frameCanvas.width = frame.width;
     frameCanvas.height = frame.height;
     frameCanvas.getContext('2d').putImageData(frame.imageData, 0, 0);
-    runDither(imageFile, frameCanvas);
+
+    // Compute interpolated overrides if any params are animated
+    if (Object.keys(animatedParams).length > 0) {
+      const t = gifFrames.length > 1 ? gifFrameIndex / (gifFrames.length - 1) : 0;
+      const startMap = {
+        resolution, threshold, contrast, brightness, levelsBlack, levelsWhite, levelsGamma,
+        density: generativeDensity, regularity: generativeRegularity, dislocate: generativeDislocate,
+        noiseAmplitude: generativeNoiseAmplitude, noiseFrequency: generativeNoiseFrequency,
+        perlinAmplitude: generativePerlinAmplitude, perlinFrequency: generativePerlinFrequency,
+        sineAmplitude: generativeSineAmplitude, sineFrequency: generativeSineFrequency,
+        maskCoverPadding: generativeMaskCoverPadding, rotation: generativeRotation,
+        centerX: generativeCenterX, centerY: generativeCenterY,
+        seed: generativeSeed, time: generativeTime,
+        particleTilt: generativeParticleTilt, particleGrain: generativeParticleGrain,
+        particleRotation: generativeParticleRotation, particleSmoothness: generativeParticleSmoothness,
+        particleWindX: generativeParticleWindX, particleWindY: generativeParticleWindY,
+        particlePerlinAmp: generativeParticlePerlinAmp, particlePerlinFreq: generativeParticlePerlinFreq,
+        separation: generativeSeparation, cohesion: generativeCohesion, alignment: generativeAlignment,
+        simulationLength: generativeSimulationLength, particleLifetime: generativeParticleLifetime,
+        spawnInterval: generativeSpawnInterval, maxParticles: generativeMaxParticles,
+        topomapSmoothness: generativeTopomapSmoothness,
+        spiralDent: generativeSpiralDent, spiralTurns: generativeSpiralTurns,
+        spiralSize: generativeSpiralSize, spiralSizeVariance: generativeSpiralSizeVariance,
+      };
+      const overrides = {};
+      for (const [key, cfg] of Object.entries(animatedParams)) {
+        const startVal = startMap[key] ?? 0;
+        const { mode = 'linear', end = startVal } = typeof cfg === 'object' && cfg !== null ? cfg : { mode: 'linear', end: cfg };
+        if (mode === 'random') {
+          overrides[key] = startVal + Math.random() * (end - startVal);
+        } else {
+          const t2 = mode === 'pingpong' ? (t < 0.5 ? t * 2 : 2 - t * 2) : t;
+          overrides[key] = startVal + (end - startVal) * t2;
+        }
+      }
+      frameOverridesRef.current = overrides;
+    }
+
+    runDither(imageFile, frameCanvas).finally(() => {
+      frameOverridesRef.current = null;
+    });
   }, [gifFrameIndex]); // eslint-disable-line
 
   // Advance frames when playing
@@ -960,6 +1351,30 @@ export default function AppDither() {
     } else {
       setGifFrames([]);
     }
+  };
+
+  const fileToFrame = (file) => new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      resolve({ imageData: c.getContext('2d').getImageData(0, 0, c.width, c.height), width: c.width, height: c.height, delay: 10 });
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+
+  const addFrameFromFile = async (file) => {
+    if (!file.type.startsWith('image/')) return;
+    let base = gifFrames;
+    if (base.length === 0 && imageFile) {
+      base = [await fileToFrame(imageFile)];
+    }
+    const newFrame = await fileToFrame(file);
+    setGifFrames([...base, newFrame]);
   };
 
   const handleDrop = (e) => {
@@ -1031,23 +1446,61 @@ export default function AppDither() {
     a.click();
   };
 
+  const computeFrameOverrides = (frameIndex, totalFrames) => {
+    if (!Object.keys(animatedParams).length || totalFrames <= 1) return null;
+    const t = frameIndex / (totalFrames - 1);
+    const startMap = {
+      resolution, threshold, contrast, brightness, levelsBlack, levelsWhite, levelsGamma,
+      density: generativeDensity, regularity: generativeRegularity, dislocate: generativeDislocate,
+      noiseAmplitude: generativeNoiseAmplitude, noiseFrequency: generativeNoiseFrequency,
+      perlinAmplitude: generativePerlinAmplitude, perlinFrequency: generativePerlinFrequency,
+      sineAmplitude: generativeSineAmplitude, sineFrequency: generativeSineFrequency,
+      maskCoverPadding: generativeMaskCoverPadding, rotation: generativeRotation,
+      centerX: generativeCenterX, centerY: generativeCenterY,
+      seed: generativeSeed, time: generativeTime,
+      particleTilt: generativeParticleTilt, particleGrain: generativeParticleGrain,
+      particleRotation: generativeParticleRotation, particleSmoothness: generativeParticleSmoothness,
+      particleWindX: generativeParticleWindX, particleWindY: generativeParticleWindY,
+      particlePerlinAmp: generativeParticlePerlinAmp, particlePerlinFreq: generativeParticlePerlinFreq,
+      separation: generativeSeparation, cohesion: generativeCohesion, alignment: generativeAlignment,
+      simulationLength: generativeSimulationLength, particleLifetime: generativeParticleLifetime,
+      spawnInterval: generativeSpawnInterval, maxParticles: generativeMaxParticles,
+      topomapSmoothness: generativeTopomapSmoothness,
+      spiralDent: generativeSpiralDent, spiralTurns: generativeSpiralTurns,
+      spiralSize: generativeSpiralSize, spiralSizeVariance: generativeSpiralSizeVariance,
+    };
+    const overrides = {};
+    for (const [key, cfg] of Object.entries(animatedParams)) {
+      const startVal = startMap[key] ?? 0;
+      const { mode = 'linear', end = startVal } = typeof cfg === 'object' && cfg !== null ? cfg : { mode: 'linear', end: cfg };
+      if (mode === 'random') {
+        overrides[key] = startVal + Math.random() * (end - startVal);
+      } else {
+        const t2 = mode === 'pingpong' ? (t < 0.5 ? t * 2 : 2 - t * 2) : t;
+        overrides[key] = startVal + (end - startVal) * t2;
+      }
+    }
+    return overrides;
+  };
+
   const buildSvgExportOptions = (w, h) => {
     const transparentStroke = exportTransparentStrokeOnly;
     const effectiveStroke = strokeColor ?? accentColor ?? (isLightColor(canvasBgColor) ? '#000000' : '#ffffff');
     const ditherStrokeColor = transparentStroke ? effectiveStroke : (strokeColor ?? undefined);
+    const _o = frameOverridesRef.current ?? {};
     return {
       width: w, height: h, imageWidth: w, imageHeight: h,
       backgroundColor: canvasBgColor,
       applyDithering,
       applyColorPalette: usePalette,
       colorPalette: usePalette && colorPalette.length > 0 ? colorPalette : undefined,
-      ditheringResolution: resolution,
-      ditheringThreshold: threshold,
-      ditheringContrast: contrast,
-      ditheringBrightness: brightness,
-      ditheringLevelsBlack: levelsBlack,
-      ditheringLevelsWhite: levelsWhite,
-      ditheringLevelsGamma: levelsGamma,
+      ditheringResolution: Math.max(1, Math.round(_o.resolution ?? resolution)),
+      ditheringThreshold: _o.threshold ?? threshold,
+      ditheringContrast: _o.contrast ?? contrast,
+      ditheringBrightness: _o.brightness ?? brightness,
+      ditheringLevelsBlack: _o.levelsBlack ?? levelsBlack,
+      ditheringLevelsWhite: _o.levelsWhite ?? levelsWhite,
+      ditheringLevelsGamma: _o.levelsGamma ?? levelsGamma,
       ditheringMethod: method,
       ditheringColorCount: (usePalette && colorPalette.length > 0) ? colorPalette.length : 2,
       exportMode,
@@ -1069,13 +1522,15 @@ export default function AppDither() {
       if (gifFrames.length > 1) {
         const baseName = (imageFile?.name || 'export').replace(/\.[^.]+$/, '');
         for (let i = 0; i < gifFrames.length; i++) {
+          frameOverridesRef.current = computeFrameOverrides(i, gifFrames.length);
           const frameImg = await frameToImg(gifFrames[i]);
           const { width, height } = gifFrames[i];
           const svgString = await exportImageToSVG({ image: frameImg }, null, buildSvgExportOptions(width, height));
+          frameOverridesRef.current = null;
           downloadSVG(svgString, `${baseName}-frame-${String(i + 1).padStart(3, '0')}.svg`);
-          // Small delay so browser doesn't swallow downloads
           await new Promise((r) => setTimeout(r, 80));
         }
+        frameOverridesRef.current = null;
         return;
       }
       // Single image export
@@ -1114,6 +1569,7 @@ export default function AppDither() {
       if (framesToProcess) {
         const newLayers = [];
         for (let i = 0; i < framesToProcess.length; i++) {
+          frameOverridesRef.current = computeFrameOverrides(i, framesToProcess.length);
           const frameCanvas = document.createElement('canvas');
           frameCanvas.width = framesToProcess[i].width;
           frameCanvas.height = framesToProcess[i].height;
@@ -1121,10 +1577,12 @@ export default function AppDither() {
           const w = framesToProcess[i].width;
           const h = framesToProcess[i].height;
           const svgString = await exportImageToSVG({ image: frameCanvas }, null, buildSvgExportOptions(w, h));
+          frameOverridesRef.current = null;
           const name = `${baseName}-frame-${String(i + 1).padStart(3, '0')}.svg`;
           const { url } = await makeSvgBlobUrl(svgString, name);
           newLayers.push({ id: `al-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`, name, imagePreviewUrl: url });
         }
+        frameOverridesRef.current = null;
         setAnimateLayers((prev) => [...prev, ...newLayers]);
       } else {
         const w = img.naturalWidth;
@@ -1155,6 +1613,7 @@ export default function AppDither() {
         const exportData = await runDither(imageFile, drawable, true);
         if (!exportData) return null;
         const { width, height, imageData, backgroundColor, strokeStyle } = exportData;
+        const _o = frameOverridesRef.current ?? {};
         const opts = {
           dpr: Math.min(3, Math.max(1, window.devicePixelRatio || 1)),
           density: generativeDensity, regularity: generativeRegularity, dislocate: generativeDislocate,
@@ -1162,7 +1621,8 @@ export default function AppDither() {
           sineAmplitude: generativeSineAmplitude, sineFrequency: generativeSineFrequency,
           maskOn: generativeMaskOn, maskCoveringLines: generativeMaskCoveringLines, maskCoverPadding: generativeMaskCoverPadding,
           rotation: generativeRotation, centerX: generativeCenterX, centerY: generativeCenterY,
-          linesPerspective: generativeLinesPerspective, renderBackground: 'stroke', backgroundColor, strokeStyle,
+          linesPerspective: generativeLinesPerspective, renderBackground: backgroundColor === 'none' ? false : 'stroke', backgroundColor, strokeStyle, seed: generativeSeed, time: generativeTime,
+          ..._o,
         };
         const svg = generativeMode === 'circles' ? buildGenerativeCirclesSvg(width, height, imageData, opts)
           : generativeMode === 'particles' ? buildGenerativeParticlesSvg(width, height, imageData, { ...opts, particleTilt: generativeParticleTilt, particleGrain: generativeParticleGrain, particleRotation: generativeParticleRotation, particleSmoothness: generativeParticleSmoothness, particleWindX: generativeParticleWindX, particleWindY: generativeParticleWindY, particlePerlinAmp: generativeParticlePerlinAmp, particlePerlinFreq: generativeParticlePerlinFreq, separation: generativeSeparation, cohesion: generativeCohesion, alignment: generativeAlignment, avoidLines: generativeAvoidLines, simulationLength: generativeSimulationLength, particleLifetime: generativeParticleLifetime, spawnMode: generativeSpawnMode, spawnInterval: generativeSpawnInterval, maxParticles: generativeMaxParticles })
@@ -1176,11 +1636,13 @@ export default function AppDither() {
       if (framesToProcess) {
         const newLayers = [];
         for (let i = 0; i < framesToProcess.length; i++) {
+          frameOverridesRef.current = computeFrameOverrides(i, framesToProcess.length);
           const frameCanvas = document.createElement('canvas');
           frameCanvas.width = framesToProcess[i].width;
           frameCanvas.height = framesToProcess[i].height;
           frameCanvas.getContext('2d').putImageData(framesToProcess[i].imageData, 0, 0);
           const svg = await processFrame(frameCanvas);
+          frameOverridesRef.current = null;
           if (!svg) continue;
           const blob = new Blob([svg], { type: 'image/svg+xml' });
           const name = `${baseName}-frame-${String(i + 1).padStart(3, '0')}-generative.svg`;
@@ -1209,6 +1671,7 @@ export default function AppDither() {
     setIsGeneratingSvg(true);
 
     const buildGenerativeSvg = ({ width, height, imageData, backgroundColor, strokeStyle }) => {
+      const _o = frameOverridesRef.current ?? {};
       const opts = {
         dpr: Math.min(3, Math.max(1, window.devicePixelRatio || 1)),
         density: generativeDensity,
@@ -1226,9 +1689,10 @@ export default function AppDither() {
         centerX: generativeCenterX,
         centerY: generativeCenterY,
         linesPerspective: generativeLinesPerspective,
-        renderBackground: 'stroke',
+        renderBackground: backgroundColor === 'none' ? false : 'stroke',
         backgroundColor,
         strokeStyle,
+        ..._o,
       };
       const svg = generativeMode === 'circles'
         ? buildGenerativeCirclesSvg(width, height, imageData, opts)
@@ -1268,16 +1732,19 @@ export default function AppDither() {
       if (gifFrames.length > 1) {
         const baseName = (imageFile?.name || 'export').replace(/\.[^.]+$/, '');
         for (let i = 0; i < gifFrames.length; i++) {
+          frameOverridesRef.current = computeFrameOverrides(i, gifFrames.length);
           const frameCanvas = document.createElement('canvas');
           frameCanvas.width = gifFrames[i].width;
           frameCanvas.height = gifFrames[i].height;
           frameCanvas.getContext('2d').putImageData(gifFrames[i].imageData, 0, 0);
           const exportData = await runDither(imageFile, frameCanvas, true);
-          if (!exportData) continue;
+          if (!exportData) { frameOverridesRef.current = null; continue; }
           const svg = buildGenerativeSvg(exportData);
+          frameOverridesRef.current = null;
           downloadSVG(svg, `${baseName}-frame-${String(i + 1).padStart(3, '0')}-generative.svg`);
           await new Promise((r) => setTimeout(r, 80));
         }
+        frameOverridesRef.current = null;
         return;
       }
       // Single image
@@ -1336,40 +1803,46 @@ export default function AppDither() {
       return { vb, inner };
     });
 
-    let defs = '';
-    let cells = '';
+    const perPage = cols * rows;
+    const pageCount = Math.max(1, Math.ceil(parsedFrames.length / perPage));
 
-    for (let i = 0; i < cols * rows; i++) {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      const cx = col * (CELL + pad);
-      const cy = row * (CELL + pad);
-      const clipId = `cell-clip-${i}`;
-      defs += `<clipPath id="${clipId}"><rect x="${cx + margin}" y="${cy + margin}" width="${INNER}" height="${INNER}"/></clipPath>\n`;
+    for (let p = 0; p < pageCount; p++) {
+      let defs = '';
+      let cells = '';
 
-      const frame = parsedFrames[i];
-      if (frame) {
-        // Nested SVG inset by margin inside each cell
-        cells += `<svg x="${cx + margin}" y="${cy + margin}" width="${INNER}" height="${INNER}" viewBox="${frame.vb}" preserveAspectRatio="xMidYMid meet" clip-path="url(#${clipId})">\n${frame.inner}\n</svg>\n`;
-      }
+      for (let i = 0; i < perPage; i++) {
+        const globalIndex = p * perPage + i;
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const cx = col * (CELL + pad);
+        const cy = row * (CELL + pad);
+        const clipId = `cell-clip-${p}-${i}`;
+        defs += `<clipPath id="${clipId}"><rect x="${cx + margin}" y="${cy + margin}" width="${INNER}" height="${INNER}"/></clipPath>\n`;
 
-      for (const k of animateKentos) {
-        const size = k.size || 10;
-        const label = k.type === 'text' ? (k.text || '') : k.type === 'number' ? String(i + 1) : null;
-        if (label) {
-          const pos = cornerPos[k.corner]?.(cx, cy);
-          if (pos) {
-            const { paths } = hersheyPaths(label, { font: k.font || 'futural', size, x: pos.x, y: pos.y });
-            cells += paths.map((d) =>
-              `<path d="${d}" stroke="${k.color || '#ffffff'}" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`
-            ).join('\n') + '\n';
+        const frame = parsedFrames[globalIndex];
+        if (frame) {
+          cells += `<svg x="${cx + margin}" y="${cy + margin}" width="${INNER}" height="${INNER}" viewBox="${frame.vb}" preserveAspectRatio="xMidYMid meet" clip-path="url(#${clipId})">\n${frame.inner}\n</svg>\n`;
+        }
+
+        for (const k of animateKentos) {
+          const size = k.size || 10;
+          const label = k.type === 'text' ? (k.text || '') : k.type === 'number' ? String(globalIndex + 1) : null;
+          if (label) {
+            const pos = cornerPos[k.corner]?.(cx, cy);
+            if (pos) {
+              const { paths } = hersheyPaths(label, { font: k.font || 'futural', size, x: pos.x, y: pos.y });
+              cells += paths.map((d) =>
+                `<path d="${d}" stroke="${k.color || '#ffffff'}" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`
+              ).join('\n') + '\n';
+            }
           }
         }
       }
-    }
 
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">\n<defs>\n${defs}</defs>\n${cells}</svg>`;
-    downloadSVG(svg, 'animate-grid.svg');
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">\n<defs>\n${defs}</defs>\n${cells}</svg>`;
+      const suffix = pageCount > 1 ? `-p${String(p + 1).padStart(3, '0')}` : '';
+      downloadSVG(svg, `animate-grid${suffix}.svg`);
+    }
   };
 
   useEffect(() => {
@@ -1423,6 +1896,14 @@ export default function AppDither() {
   const handleProcessedImageLoad = useCallback(() => {
     measureImageRect();
   }, [measureImageRect]);
+
+  // Re-measure overlay rect after zoom change
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => measureImageRect());
+    return () => cancelAnimationFrame(raf);
+  }, [canvasZoom, measureImageRect]);
+
+  const showAnim = gifFrames.length > 1;
 
   const displayUrl = processedUrl || imagePreviewUrl;
 
@@ -1544,57 +2025,69 @@ export default function AppDither() {
           </aside>
 
           {/* Canvas */}
-          <div className="flex-1 min-w-0 flex items-center justify-center p-6 overflow-auto">
+          <div className="flex-1 min-w-0 flex items-start justify-center p-6 overflow-auto">
             {animateLayers.length === 0 ? (
               <div className={`border-2 border-dashed rounded-xl w-[480px] h-[320px] flex items-center justify-center text-dither-muted-mid text-base select-none transition-colors ${animateDragging ? 'border-dither-border-active bg-white/[0.04]' : 'border-dither-border'}`}>
                 Drop frames here to animate
               </div>
             ) : animateGridEnabled ? (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: `repeat(${animateGridCols}, 1fr)`,
-                  gap: `${animateGridPadding}px`,
-                  padding: `${animateGridMargin}px`,
-                  width: '100%',
-                  maxWidth: '900px',
-                }}
-              >
-                {Array.from({ length: animateGridCols * animateGridRows }).map((_, i) => {
+              <div className="flex flex-col gap-6 items-center w-full">
+                {(() => {
                   const orderedLayers = animateGridReverse ? [...animateLayers].reverse() : animateLayers;
-                  const layer = orderedLayers[i];
-                  const m = animateGridMargin;
-                  const cornerPos = { 'top-left': { top: m + 4, left: m + 4 }, 'top-right': { top: m + 4, right: m + 4 }, 'bottom-left': { bottom: m + 4, left: m + 4 }, 'bottom-right': { bottom: m + 4, right: m + 4 } };
-                  return (
-                    <div key={i} className="aspect-square overflow-hidden relative">
-                      {layer ? (
-                        <img src={layer.imagePreviewUrl} alt={layer.name} className="w-full h-full object-contain" style={{ padding: `${m}px` }} />
-                      ) : null}
-                      {animateKentos.map((k) => {
-                        const KENTO_SIZE = k.size || 10;
-                        if (k.type === 'number' || k.type === 'text') {
-                          const label = k.type === 'text' ? (k.text || '') : String(i + 1);
-                          if (!label) return null;
-                          const { paths, width } = hersheyPaths(label, { font: k.font || 'futural', size: KENTO_SIZE, x: 0, y: 0 });
+                  const perPage = animateGridCols * animateGridRows;
+                  const pageCount = Math.max(1, Math.ceil(orderedLayers.length / perPage));
+                  return Array.from({ length: pageCount }).map((_, p) => (
+                    <div key={p} className="w-full" style={{ maxWidth: '900px' }}>
+                      {pageCount > 1 && (
+                        <div className="text-[11px] text-dither-muted-mid mb-2 select-none">Page {p + 1} / {pageCount}</div>
+                      )}
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: `repeat(${animateGridCols}, 1fr)`,
+                          gap: `${animateGridPadding}px`,
+                          padding: `${animateGridMargin}px`,
+                        }}
+                      >
+                        {Array.from({ length: perPage }).map((_, i) => {
+                          const globalIndex = p * perPage + i;
+                          const layer = orderedLayers[globalIndex];
+                          const m = animateGridMargin;
+                          const cornerPos = { 'top-left': { top: m + 4, left: m + 4 }, 'top-right': { top: m + 4, right: m + 4 }, 'bottom-left': { bottom: m + 4, left: m + 4 }, 'bottom-right': { bottom: m + 4, right: m + 4 } };
                           return (
-                            <div key={k.id} className="absolute pointer-events-none" style={cornerPos[k.corner]}>
-                              <svg width={width + 4} height={KENTO_SIZE + 4} style={{ overflow: 'visible' }}>
-                                {paths.map((d, pi) => (
-                                  <path key={pi} d={d} stroke={k.color || '#ffffff'} strokeWidth={1} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                                ))}
-                              </svg>
+                            <div key={i} className="aspect-square overflow-hidden relative">
+                              {layer ? (
+                                <img src={layer.imagePreviewUrl} alt={layer.name} className="w-full h-full object-contain" style={{ padding: `${m}px` }} />
+                              ) : null}
+                              {animateKentos.map((k) => {
+                                const KENTO_SIZE = k.size || 10;
+                                if (k.type === 'number' || k.type === 'text') {
+                                  const label = k.type === 'text' ? (k.text || '') : String(globalIndex + 1);
+                                  if (!label) return null;
+                                  const { paths, width } = hersheyPaths(label, { font: k.font || 'futural', size: KENTO_SIZE, x: 0, y: 0 });
+                                  return (
+                                    <div key={k.id} className="absolute pointer-events-none" style={cornerPos[k.corner]}>
+                                      <svg width={width + 4} height={KENTO_SIZE + 4} style={{ overflow: 'visible' }}>
+                                        {paths.map((d, pi) => (
+                                          <path key={pi} d={d} stroke={k.color || '#ffffff'} strokeWidth={1} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                                        ))}
+                                      </svg>
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <div key={k.id} className="absolute pointer-events-none" style={cornerPos[k.corner]}>
+                                    {k.svgUrl ? <img src={k.svgUrl} alt="" className="w-5 h-5 object-contain" /> : null}
+                                  </div>
+                                );
+                              })}
                             </div>
                           );
-                        }
-                        return (
-                          <div key={k.id} className="absolute pointer-events-none" style={cornerPos[k.corner]}>
-                            {k.svgUrl ? <img src={k.svgUrl} alt="" className="w-5 h-5 object-contain" /> : null}
-                          </div>
-                        );
-                      })}
+                        })}
+                      </div>
                     </div>
-                  );
-                })}
+                  ));
+                })()}
               </div>
             ) : null}
           </div>
@@ -1809,7 +2302,7 @@ export default function AppDither() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs text-dither-muted-light">Canvas background</label>
+              <label className="text-xs text-dither-muted-light">Background</label>
               <div className="flex items-center gap-1.5">
                 {['#0a0a0a', '#ffffff'].map((c) => (
                   <button
@@ -1830,10 +2323,26 @@ export default function AppDither() {
                 />
                 <span className="text-[11px] text-dither-muted font-mono">{canvasBgColor}</span>
               </div>
+              <div className="flex items-center justify-between gap-1.5">
+                <label className="text-[11px] text-dither-muted cursor-pointer" onClick={() => setRemoveBg(v => !v)}>Remove</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={0}
+                    max={255}
+                    value={removeBgThreshold}
+                    onChange={(e) => setRemoveBgThreshold(Math.max(0, parseInt(e.target.value) || 0))}
+                    disabled={!removeBg}
+                    className="w-12 px-1.5 py-0.5 text-[11px] text-dither-text bg-[#111] border border-dither-border rounded text-right disabled:opacity-30"
+                    title="Remove threshold"
+                  />
+                  <input type="checkbox" checked={removeBg} onChange={(e) => setRemoveBg(e.target.checked)} className="w-4 h-4 accent-dither-accent cursor-pointer" />
+                </div>
+              </div>
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs text-dither-muted-light">Accent color</label>
+              <label className="text-xs text-dither-muted-light">Foreground</label>
               <div className="flex items-center gap-1.5">
                 {['#ffffff', '#000000'].map((c) => (
                   <button
@@ -1850,20 +2359,26 @@ export default function AppDither() {
                   value={accentColor}
                   onChange={(e) => setAccentColor(e.target.value)}
                   className="w-7 h-7 p-0 border border-dither-border rounded cursor-pointer bg-dither-panel flex-shrink-0"
-                  title="Custom accent color"
+                  title="Custom foreground color"
                 />
                 <span className="text-[11px] text-dither-muted font-mono">{accentColor}</span>
               </div>
-            </div>
-
-            <div className="flex flex-row items-center justify-between gap-1">
-              <label className="text-xs text-dither-muted-light">Transparent background</label>
-              <input
-                type="checkbox"
-                checked={transparentBg}
-                onChange={(e) => setTransparentBg(e.target.checked)}
-                className="w-4 h-4 accent-dither-accent cursor-pointer"
-              />
+              <div className="flex items-center justify-between gap-1.5">
+                <label className="text-[11px] text-dither-muted cursor-pointer" onClick={() => setKeepFg(v => !v)}>Keep only</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={0}
+                    max={255}
+                    value={keepFgThreshold}
+                    onChange={(e) => setKeepFgThreshold(Math.max(0, parseInt(e.target.value) || 0))}
+                    disabled={!keepFg}
+                    className="w-12 px-1.5 py-0.5 text-[11px] text-dither-text bg-[#111] border border-dither-border rounded text-right disabled:opacity-30"
+                    title="Keep threshold"
+                  />
+                  <input type="checkbox" checked={keepFg} onChange={(e) => setKeepFg(e.target.checked)} className="w-4 h-4 accent-dither-accent cursor-pointer" />
+                </div>
+              </div>
             </div>
 
             <div className="flex flex-col gap-3">
@@ -1876,15 +2391,63 @@ export default function AppDither() {
 
               <div className="flex flex-col gap-2.5">
                 <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-dither-muted-mid">Color</div>
-                <Slider value={contrast} onChange={setContrast} min={-100} max={100} label="Contrast" />
-                <Slider value={brightness} onChange={setBrightness} min={-100} max={100} label="Brightness" />
+                <AnimSlider animKey="contrast" value={contrast} onChange={setContrast} min={-100} max={100} label="Contrast" showAnim={showAnim} endValue={animatedParams.contrast} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                <AnimSlider animKey="brightness" value={brightness} onChange={setBrightness} min={-100} max={100} label="Brightness" showAnim={showAnim} endValue={animatedParams.brightness} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                 <div className="flex flex-col gap-1">
                   <label className="text-xs text-dither-muted-light">Levels</label>
                 </div>
-                <Slider value={levelsBlack} onChange={setLevelsBlack} min={0} max={255} label="Black" />
-                <Slider value={levelsWhite} onChange={setLevelsWhite} min={0} max={255} label="White" />
-                <Slider value={levelsGamma} onChange={setLevelsGamma} min={0.25} max={4} step={0.05} label="Mid (γ)" />
+                <AnimSlider animKey="levelsBlack" value={levelsBlack} onChange={setLevelsBlack} min={0} max={255} label="Black" showAnim={showAnim} endValue={animatedParams.levelsBlack} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                <AnimSlider animKey="levelsWhite" value={levelsWhite} onChange={setLevelsWhite} min={0} max={255} label="White" showAnim={showAnim} endValue={animatedParams.levelsWhite} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                <AnimSlider animKey="levelsGamma" value={levelsGamma} onChange={setLevelsGamma} min={0.25} max={4} step={0.05} label="Mid (γ)" showAnim={showAnim} endValue={animatedParams.levelsGamma} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
               </div>
+            </div>
+          </div>
+
+          <div className="flex-shrink-0 border-t border-dither-border p-3 flex flex-col gap-2 bg-dither-bg/80">
+            <div className="text-[11px] font-medium text-dither-muted-light uppercase tracking-wider flex-shrink-0">
+              Presets
+            </div>
+            {presets.length > 0 && (
+              <div className="flex flex-col gap-0.5 max-h-[min(160px,20vh)] overflow-y-auto overflow-x-hidden">
+                {presets.map((preset) => (
+                  <div key={preset.id} className="flex items-center gap-1 group/preset">
+                    <button
+                      type="button"
+                      onClick={() => applySettings(preset.settings)}
+                      className="flex-1 min-w-0 text-left text-[11px] text-dither-muted hover:text-dither-text px-2 py-1 rounded hover:bg-white/[0.06] transition-colors truncate cursor-pointer bg-transparent border-0"
+                      title={preset.name}
+                    >
+                      {preset.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPresets(prev => prev.filter(p => p.id !== preset.id))}
+                      className="flex-shrink-0 text-dither-muted hover:text-red-400 p-1 rounded cursor-pointer bg-transparent border-0 opacity-0 group-hover/preset:opacity-100 transition-opacity"
+                      title="Delete preset"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-1 flex-shrink-0">
+              <input
+                type="text"
+                value={presetNameDraft}
+                onChange={(e) => setPresetNameDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveCurrentAsPreset(); }}
+                placeholder="Preset name…"
+                className="flex-1 min-w-0 px-2 py-1 text-[11px] text-dither-text bg-[#111] border border-dither-border rounded placeholder-dither-muted-mid outline-none focus:border-dither-border-active"
+              />
+              <button
+                type="button"
+                onClick={saveCurrentAsPreset}
+                disabled={!presetNameDraft.trim()}
+                className="flex-shrink-0 px-2 py-1 text-[11px] text-dither-text bg-white/[0.06] border border-dither-border-light rounded hover:bg-white/[0.1] transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                Save
+              </button>
             </div>
           </div>
 
@@ -1931,7 +2494,7 @@ export default function AppDither() {
 
         <div
           ref={previewContainerRef}
-          className={`flex-1 min-w-0 flex items-center justify-center p-6 relative bg-dither-bg ${isPickingCenter ? 'cursor-crosshair' : ''}`}
+          className={`flex-1 min-w-0 flex items-center justify-center p-6 relative bg-dither-bg ${isPickingCenter ? 'cursor-crosshair' : ''} ${canvasZoom !== 'fit' ? 'overflow-hidden' : ''}`}
           style={{ background: canvasBgColor }}
           onClick={isPickingCenter ? handlePreviewClick : undefined}
           role={isPickingCenter ? 'button' : undefined}
@@ -1939,21 +2502,6 @@ export default function AppDither() {
         >
           {!imageFile && (
             <span className="text-lg text-dither-muted-mid">Drop image anywhere or use sidebar</span>
-          )}
-          {gifFrames.length > 1 && (
-            <div className="absolute top-3 left-3 z-20 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsGifPlaying((v) => !v)}
-                className="flex items-center justify-center w-8 h-8 rounded-full bg-black/60 text-white hover:bg-black/80 transition-colors cursor-pointer"
-                title={isGifPlaying ? 'Pause' : 'Play'}
-              >
-                {isGifPlaying ? <Pause size={14} /> : <Play size={14} />}
-              </button>
-              <span className="text-[11px] text-white/70 bg-black/50 px-1.5 py-0.5 rounded font-mono">
-                {gifFrameIndex + 1} / {gifFrames.length}
-              </span>
-            </div>
           )}
           {isProcessing && (
             <div className="absolute w-8 h-8 border-[3px] border-dither-border-hover border-t-dither-muted rounded-full animate-dither-spin" />
@@ -1964,7 +2512,11 @@ export default function AppDither() {
               src={imagePreviewUrl}
               alt=""
               className="max-w-full max-h-full object-contain block absolute pointer-events-none"
-              style={{ display: processedUrl ? 'none' : 'block' }}
+              style={{
+                display: processedUrl ? 'none' : 'block',
+                transform: canvasZoom !== 'fit' ? `scale(${canvasZoom})` : undefined,
+                transformOrigin: 'center center',
+              }}
               crossOrigin="anonymous"
               onLoad={() => {
                 const img = imgRef.current;
@@ -1984,7 +2536,11 @@ export default function AppDither() {
               src={processedUrl}
               alt="Dithered"
               className="max-w-full max-h-full object-contain block"
-              style={{ imageRendering: applyGenerative ? 'auto' : 'pixelated' }}
+              style={{
+                imageRendering: applyGenerative ? 'auto' : 'pixelated',
+                transform: canvasZoom !== 'fit' ? `scale(${canvasZoom})` : undefined,
+                transformOrigin: 'center center',
+              }}
               onLoad={handleProcessedImageLoad}
             />
           )}
@@ -2008,6 +2564,106 @@ export default function AppDither() {
                   className="absolute inset-0 w-full h-full object-contain"
                 />
               ))}
+            </div>
+          )}
+
+          {imageFile && (
+            <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2">
+              {imageFile && (
+                <div
+                  className="flex items-center gap-0.5 bg-black/60 backdrop-blur-sm rounded-lg p-1"
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={(e) => { e.preventDefault(); e.stopPropagation(); const f = e.dataTransfer.files?.[0]; if (f) addFrameFromFile(f); }}
+                >
+                  {gifFrames.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setIsGifPlaying((v) => !v)}
+                      className="w-7 h-7 flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 rounded-md transition-colors cursor-pointer bg-transparent border-0"
+                      title={isGifPlaying ? 'Pause' : 'Play'}
+                    >
+                      {isGifPlaying ? <Pause size={13} /> : <Play size={13} />}
+                    </button>
+                  )}
+                  <label
+                    className="relative text-[11px] text-white/60 font-mono px-1 select-none cursor-pointer hover:text-white/90 transition-colors"
+                    title="Drop or click to add a frame"
+                  >
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                      onChange={(e) => { if (e.target.files?.[0]) { addFrameFromFile(e.target.files[0]); e.target.value = ''; } }}
+                    />
+                    {gifFrames.length > 1 ? `${gifFrameIndex + 1} / ${gifFrames.length}` : '1'}
+                  </label>
+                </div>
+              )}
+              <div className="flex items-center gap-0.5 bg-black/60 backdrop-blur-sm rounded-lg p-1">
+                <button
+                  type="button"
+                  onClick={zoomOut}
+                  disabled={canvasZoom !== 'fit' && canvasZoom <= 0.001}
+                  className="w-7 h-7 flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 rounded-md transition-colors cursor-pointer bg-transparent border-0 text-base leading-none disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Zoom out"
+                >−</button>
+                <input
+                  type="text"
+                  value={zoomDraft !== null ? zoomDraft : (canvasZoom === 'fit' ? 'Fit' : `${+(canvasZoom * 100).toPrecision(3)}%`)}
+                  onFocus={() => setZoomDraft(canvasZoom === 'fit' ? '100' : String(+(canvasZoom * 100).toPrecision(3)))}
+                  onChange={(e) => setZoomDraft(e.target.value)}
+                  onBlur={() => {
+                    const v = parseFloat(zoomDraft);
+                    if (Number.isFinite(v) && v > 0) setCanvasZoom(v / 100);
+                    setZoomDraft(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.currentTarget.blur(); }
+                    if (e.key === 'Escape') { setZoomDraft(null); e.currentTarget.blur(); }
+                  }}
+                  className="text-[11px] text-white/70 min-w-[42px] w-[42px] text-center font-mono bg-transparent border-0 outline-none focus:text-white focus:bg-white/10 rounded px-0.5"
+                />
+                <button
+                  type="button"
+                  onClick={zoomIn}
+                  disabled={canvasZoom !== 'fit' && canvasZoom >= 4}
+                  className="w-7 h-7 flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 rounded-md transition-colors cursor-pointer bg-transparent border-0 text-base leading-none disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Zoom in"
+                >+</button>
+                <div className="w-px h-4 bg-white/20 mx-1" />
+                <button
+                  type="button"
+                  onClick={() => setCanvasZoom('fit')}
+                  className={`px-2 h-7 text-[11px] rounded-md transition-colors cursor-pointer border-0 ${canvasZoom === 'fit' ? 'text-white bg-white/15' : 'text-white/60 hover:text-white hover:bg-white/10 bg-transparent'}`}
+                  title="Fit to window"
+                >Fit</button>
+                <button
+                  type="button"
+                  onClick={zoomToOriginal}
+                  className="px-2 h-7 text-[11px] text-white/60 hover:text-white hover:bg-white/10 rounded-md transition-colors cursor-pointer bg-transparent border-0"
+                  title="Original size (1:1 pixels)"
+                >1×</button>
+                <div className="w-px h-4 bg-white/20 mx-1" />
+                <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="text-white/50 flex-shrink-0">
+                  <line x1="1" y1="6.5" x2="12" y2="6.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/>
+                </svg>
+                <input
+                  type="text"
+                  value={strokeDraft !== null ? strokeDraft : String(strokeWidth)}
+                  onFocus={() => setStrokeDraft(String(strokeWidth))}
+                  onChange={(e) => setStrokeDraft(e.target.value)}
+                  onBlur={() => {
+                    const v = parseFloat(strokeDraft);
+                    if (Number.isFinite(v) && v > 0) setStrokeWidth(Math.round(v * 10) / 10);
+                    setStrokeDraft(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                    if (e.key === 'Escape') { setStrokeDraft(null); e.currentTarget.blur(); }
+                  }}
+                  className="text-[11px] text-white/70 w-[30px] text-center font-mono bg-transparent border-0 outline-none focus:text-white focus:bg-white/10 rounded px-0.5"
+                />
+              </div>
             </div>
           )}
         </div>
@@ -2060,8 +2716,8 @@ export default function AppDither() {
                   ))}
                 </select>
               </div>
-              <Slider value={resolution} onChange={setResolution} min={50} max={1000} step={10} label="Resolution" unit="px" />
-              <Slider value={threshold} onChange={setThreshold} min={0} max={255} label="Threshold" />
+              <AnimSlider animKey="resolution" value={resolution} onChange={setResolution} min={50} max={1000} step={10} label="Resolution" unit="px" showAnim={showAnim} endValue={animatedParams.resolution} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+              <AnimSlider animKey="threshold" value={threshold} onChange={setThreshold} min={0} max={255} label="Threshold" showAnim={showAnim} endValue={animatedParams.threshold} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
               <div className="flex flex-row items-center justify-between gap-1">
                 <label className="text-xs text-dither-muted-light">Color palette</label>
                 <button
@@ -2074,7 +2730,7 @@ export default function AppDither() {
               </div>
               {usePalette && (
                 <>
-                  <Slider value={paletteCount} onChange={(v) => setPaletteCount(Math.round(v))} min={2} max={16} step={1} label="Colors" />
+                  <AnimSlider animKey="paletteCount" value={paletteCount} onChange={(v) => setPaletteCount(Math.round(v))} min={2} max={16} step={1} label="Colors" showAnim={showAnim} endValue={animatedParams.paletteCount} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   {colorPalette.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {colorPalette.map((hex, i) => (
@@ -2166,7 +2822,7 @@ export default function AppDither() {
                             <option value="simple">Simple</option>
                           </select>
                         </div>
-                        <Slider value={pixelScale} onChange={setPixelScale} min={1} max={100} step={1} label="Pixel size" unit="%" />
+                        <AnimSlider animKey="pixelScale" value={pixelScale} onChange={setPixelScale} min={1} max={100} step={1} label="Pixel size" unit="%" showAnim={showAnim} endValue={animatedParams.pixelScale} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                         <div className="flex flex-col gap-1">
                           <label className="text-xs text-dither-muted-light">Pixel shape</label>
                           <select value={pixelShape} onChange={(e) => setPixelShape(e.target.value)} className="w-full py-1.5 px-2 text-[13px] bg-dither-panel border border-dither-border-hover rounded-md text-dither-text cursor-pointer">
@@ -2214,7 +2870,7 @@ export default function AppDither() {
                           </div>
                         </div>
                         {strokeColor && (
-                          <Slider value={strokeWidth} onChange={setStrokeWidth} min={0.1} max={5} step={0.1} label="Stroke width" />
+                          <AnimSlider animKey="strokeWidth" value={strokeWidth} onChange={setStrokeWidth} min={0.1} max={5} step={0.1} label="Stroke width" showAnim={showAnim} endValue={animatedParams.strokeWidth} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                         )}
                       </>
                     )}
@@ -2280,8 +2936,8 @@ export default function AppDither() {
                       {generativeMaskOn ? 'On' : 'Off'}
                     </button>
                   </div>
-                  <Slider value={generativeDensity} onChange={setGenerativeDensity} min={1} max={500} step={1} label="Density" />
-                  <Slider value={generativeTopomapSmoothness} onChange={setGenerativeTopomapSmoothness} min={0} max={100} step={1} label="Smoothness" />
+                  <AnimSlider animKey="density" value={generativeDensity} onChange={setGenerativeDensity} min={1} max={500} step={1} label="Density" showAnim={showAnim} endValue={animatedParams.density} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="topomapSmoothness" value={generativeTopomapSmoothness} onChange={setGenerativeTopomapSmoothness} min={0} max={100} step={1} label="Smoothness" showAnim={showAnim} endValue={animatedParams.topomapSmoothness} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                 </>
               )}
               {(generativeMode || 'lines') === 'particles' && (
@@ -2297,25 +2953,25 @@ export default function AppDither() {
                       {generativeMaskOn ? 'On' : 'Off'}
                     </button>
                   </div>
-                  <Slider value={generativeDensity} onChange={setGenerativeDensity} min={1} max={500} step={1} label="Density" />
-                  <Slider value={generativeParticleTilt} onChange={setGenerativeParticleTilt} min={0} max={3000} step={1} label="Tilt" />
-                  <Slider value={generativeParticleGrain} onChange={setGenerativeParticleGrain} min={0} max={100} step={1} label="Grain" />
-                  <Slider value={generativeParticleRotation} onChange={setGenerativeParticleRotation} min={0} max={360} step={1} label="Rotation" unit="°" />
-                  <Slider value={generativeParticleSmoothness} onChange={setGenerativeParticleSmoothness} min={0} max={100} step={1} label="Smoothness" />
+                  <AnimSlider animKey="density" value={generativeDensity} onChange={setGenerativeDensity} min={1} max={500} step={1} label="Density" showAnim={showAnim} endValue={animatedParams.density} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="particleTilt" value={generativeParticleTilt} onChange={setGenerativeParticleTilt} min={0} max={3000} step={1} label="Tilt" showAnim={showAnim} endValue={animatedParams.particleTilt} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="particleGrain" value={generativeParticleGrain} onChange={setGenerativeParticleGrain} min={0} max={100} step={1} label="Grain" showAnim={showAnim} endValue={animatedParams.particleGrain} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="particleRotation" value={generativeParticleRotation} onChange={setGenerativeParticleRotation} min={0} max={360} step={1} label="Rotation" unit="°" showAnim={showAnim} endValue={animatedParams.particleRotation} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="particleSmoothness" value={generativeParticleSmoothness} onChange={setGenerativeParticleSmoothness} min={0} max={100} step={1} label="Smoothness" showAnim={showAnim} endValue={animatedParams.particleSmoothness} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-dither-muted-mid mt-2 mb-1">Wind</div>
-                  <Slider value={generativeParticleWindX} onChange={setGenerativeParticleWindX} min={-100} max={100} step={1} label="X" />
-                  <Slider value={generativeParticleWindY} onChange={setGenerativeParticleWindY} min={-100} max={100} step={1} label="Y" />
+                  <AnimSlider animKey="particleWindX" value={generativeParticleWindX} onChange={setGenerativeParticleWindX} min={-100} max={100} step={1} label="X" showAnim={showAnim} endValue={animatedParams.particleWindX} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="particleWindY" value={generativeParticleWindY} onChange={setGenerativeParticleWindY} min={-100} max={100} step={1} label="Y" showAnim={showAnim} endValue={animatedParams.particleWindY} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-dither-muted-mid mt-2 mb-1">Perlin</div>
-                  <Slider value={generativeParticlePerlinAmp} onChange={setGenerativeParticlePerlinAmp} min={0} max={100} step={1} label="Amplitude" />
-                  <Slider value={generativeParticlePerlinFreq} onChange={setGenerativeParticlePerlinFreq} min={1} max={100} step={1} label="Frequency" />
+                  <AnimSlider animKey="particlePerlinAmp" value={generativeParticlePerlinAmp} onChange={setGenerativeParticlePerlinAmp} min={0} max={100} step={1} label="Amplitude" showAnim={showAnim} endValue={animatedParams.particlePerlinAmp} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="particlePerlinFreq" value={generativeParticlePerlinFreq} onChange={setGenerativeParticlePerlinFreq} min={1} max={100} step={1} label="Frequency" showAnim={showAnim} endValue={animatedParams.particlePerlinFreq} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-dither-muted-mid mt-2 mb-1">Flocking</div>
-                  <Slider value={generativeSeparation} onChange={setGenerativeSeparation} min={0} max={100} step={1} label="Separation" />
-                  <Slider value={generativeCohesion} onChange={setGenerativeCohesion} min={0} max={100} step={1} label="Cohesion" />
-                  <Slider value={generativeAlignment} onChange={setGenerativeAlignment} min={0} max={100} step={1} label="Alignment" />
-                  <Slider value={generativeAvoidLines} onChange={setGenerativeAvoidLines} min={0} max={100} step={1} label="Avoid lines" title="Steer particles away from previously drawn path cells" />
+                  <AnimSlider animKey="separation" value={generativeSeparation} onChange={setGenerativeSeparation} min={0} max={100} step={1} label="Separation" showAnim={showAnim} endValue={animatedParams.separation} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="cohesion" value={generativeCohesion} onChange={setGenerativeCohesion} min={0} max={100} step={1} label="Cohesion" showAnim={showAnim} endValue={animatedParams.cohesion} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="alignment" value={generativeAlignment} onChange={setGenerativeAlignment} min={0} max={100} step={1} label="Alignment" showAnim={showAnim} endValue={animatedParams.alignment} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="avoidLines" value={generativeAvoidLines} onChange={setGenerativeAvoidLines} min={0} max={100} step={1} label="Avoid lines" showAnim={showAnim} endValue={animatedParams.avoidLines} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-dither-muted-mid mt-2 mb-1">Life & simulation</div>
-                  <Slider value={generativeSimulationLength} onChange={setGenerativeSimulationLength} min={100} max={10000} step={100} label="Simulation steps" title="Total steps; simulation runs until this count then stops" />
-                  <Slider value={generativeParticleLifetime} onChange={setGenerativeParticleLifetime} min={0} max={2000} step={50} label="Particle life (steps)" title="0 = unlimited; particle dies after this many steps" />
+                  <AnimSlider animKey="simulationLength" value={generativeSimulationLength} onChange={setGenerativeSimulationLength} min={100} max={10000} step={100} label="Simulation steps" showAnim={showAnim} endValue={animatedParams.simulationLength} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="particleLifetime" value={generativeParticleLifetime} onChange={setGenerativeParticleLifetime} min={0} max={2000} step={50} label="Particle life (steps)" showAnim={showAnim} endValue={animatedParams.particleLifetime} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex flex-col gap-1">
                     <span className="text-xs text-dither-muted-light">Spawn mode</span>
                     <select
@@ -2331,8 +2987,8 @@ export default function AppDither() {
                   </div>
                   {generativeSpawnMode === 'drip' && (
                     <>
-                      <Slider value={generativeSpawnInterval} onChange={setGenerativeSpawnInterval} min={10} max={200} step={5} label="Spawn interval (steps)" title="Steps between spawning a new particle" />
-                      <Slider value={generativeMaxParticles} onChange={setGenerativeMaxParticles} min={500} max={5000} step={100} label="Max particles" title="Cap on number of particles in drip mode" />
+                      <AnimSlider animKey="spawnInterval" value={generativeSpawnInterval} onChange={setGenerativeSpawnInterval} min={10} max={200} step={5} label="Spawn interval (steps)" showAnim={showAnim} endValue={animatedParams.spawnInterval} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                      <AnimSlider animKey="maxParticles" value={generativeMaxParticles} onChange={setGenerativeMaxParticles} min={500} max={5000} step={100} label="Max particles" showAnim={showAnim} endValue={animatedParams.maxParticles} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                     </>
                   )}
                 </>
@@ -2359,9 +3015,9 @@ export default function AppDither() {
                     </select>
                   </div>
                   {generativeMaskCoveringLines !== 'off' && (
-                    <Slider value={generativeMaskCoverPadding} onChange={setGenerativeMaskCoverPadding} min={0} max={200} step={1} label="Mask padding" unit="px" />
+                    <AnimSlider animKey="maskCoverPadding" value={generativeMaskCoverPadding} onChange={setGenerativeMaskCoverPadding} min={0} max={200} step={1} label="Mask padding" unit="px" showAnim={showAnim} endValue={animatedParams.maskCoverPadding} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   )}
-                  <Slider value={generativeRotation} onChange={setGenerativeRotation} min={0} max={360} step={1} label="Rotation" unit="°" />
+                  <AnimSlider animKey="rotation" value={generativeRotation} onChange={setGenerativeRotation} min={0} max={360} step={1} label="Rotation" unit="°" showAnim={showAnim} endValue={animatedParams.rotation} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex flex-col gap-1">
                     <button
                       type="button"
@@ -2372,9 +3028,9 @@ export default function AppDither() {
                       {isPickingCenter ? 'Click image to set center…' : 'Set center'}
                     </button>
                   </div>
-                  <Slider value={generativeDensity} onChange={setGenerativeDensity} min={1} max={500} step={1} label="Density" />
-                  <Slider value={generativeSpiralDent} onChange={setGenerativeSpiralDent} min={0} max={100} step={1} label="Dent" />
-                  <Slider value={generativeSpiralTurns} onChange={setGenerativeSpiralTurns} min={1} max={20} step={0.5} label="Turns" />
+                  <AnimSlider animKey="density" value={generativeDensity} onChange={setGenerativeDensity} min={1} max={500} step={1} label="Density" showAnim={showAnim} endValue={animatedParams.density} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="spiralDent" value={generativeSpiralDent} onChange={setGenerativeSpiralDent} min={0} max={100} step={1} label="Dent" showAnim={showAnim} endValue={animatedParams.spiralDent} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="spiralTurns" value={generativeSpiralTurns} onChange={setGenerativeSpiralTurns} min={1} max={20} step={0.5} label="Turns" showAnim={showAnim} endValue={animatedParams.spiralTurns} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex flex-row items-center justify-between gap-1">
                     <label className="text-xs text-dither-muted-light">Hide back side</label>
                     <button
@@ -2411,11 +3067,11 @@ export default function AppDither() {
                       {isPickingCenter ? 'Click image to set tilt center…' : 'Set tilt center'}
                     </button>
                   </div>
-                  <Slider value={generativeDensity} onChange={setGenerativeDensity} min={1} max={100} step={1} label="Spirals" />
-                  <Slider value={generativeSpiralSize} onChange={setGenerativeSpiralSize} min={1} max={100} step={1} label="Size" />
-                  <Slider value={generativeSpiralSizeVariance} onChange={setGenerativeSpiralSizeVariance} min={0} max={100} step={1} label="Size variance" />
-                  <Slider value={generativeSpiralDent} onChange={setGenerativeSpiralDent} min={0} max={100} step={1} label="Tilt" />
-                  <Slider value={generativeSpiralTurns} onChange={setGenerativeSpiralTurns} min={1} max={20} step={0.5} label="Turns" />
+                  <AnimSlider animKey="density" value={generativeDensity} onChange={setGenerativeDensity} min={1} max={100} step={1} label="Spirals" showAnim={showAnim} endValue={animatedParams.density} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="spiralSize" value={generativeSpiralSize} onChange={setGenerativeSpiralSize} min={1} max={100} step={1} label="Size" showAnim={showAnim} endValue={animatedParams.spiralSize} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="spiralSizeVariance" value={generativeSpiralSizeVariance} onChange={setGenerativeSpiralSizeVariance} min={0} max={100} step={1} label="Size variance" showAnim={showAnim} endValue={animatedParams.spiralSizeVariance} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="spiralDent" value={generativeSpiralDent} onChange={setGenerativeSpiralDent} min={0} max={100} step={1} label="Tilt" showAnim={showAnim} endValue={animatedParams.spiralDent} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="spiralTurns" value={generativeSpiralTurns} onChange={setGenerativeSpiralTurns} min={1} max={20} step={0.5} label="Turns" showAnim={showAnim} endValue={animatedParams.spiralTurns} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex flex-row items-center justify-between gap-1">
                     <label className="text-xs text-dither-muted-light">Hide back side</label>
                     <button
@@ -2451,9 +3107,9 @@ export default function AppDither() {
                     </select>
                   </div>
                   {generativeMaskCoveringLines !== 'off' && (
-                    <Slider value={generativeMaskCoverPadding} onChange={setGenerativeMaskCoverPadding} min={0} max={200} step={1} label="Mask padding" unit="px" />
+                    <AnimSlider animKey="maskCoverPadding" value={generativeMaskCoverPadding} onChange={setGenerativeMaskCoverPadding} min={0} max={200} step={1} label="Mask padding" unit="px" showAnim={showAnim} endValue={animatedParams.maskCoverPadding} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   )}
-                  <Slider value={generativeRotation} onChange={setGenerativeRotation} min={0} max={360} step={1} label="Rotation" unit="°" />
+                  <AnimSlider animKey="rotation" value={generativeRotation} onChange={setGenerativeRotation} min={0} max={360} step={1} label="Rotation" unit="°" showAnim={showAnim} endValue={animatedParams.rotation} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   {(generativeMode || 'lines') === 'lines' && (
                     <>
                       <div className="flex flex-row items-center justify-between gap-1">
@@ -2469,8 +3125,8 @@ export default function AppDither() {
                       </div>
                       {generativeLinesPerspective && (
                         <>
-                          <Slider value={generativeCenterX} onChange={setGenerativeCenterX} min={0} max={1} step={0.01} label="Center X" />
-                          <Slider value={generativeCenterY} onChange={setGenerativeCenterY} min={0} max={1} step={0.01} label="Center Y" />
+                          <AnimSlider animKey="centerX" value={generativeCenterX} onChange={setGenerativeCenterX} min={0} max={1} step={0.01} label="Center X" showAnim={showAnim} endValue={animatedParams.centerX} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                          <AnimSlider animKey="centerY" value={generativeCenterY} onChange={setGenerativeCenterY} min={0} max={1} step={0.01} label="Center Y" showAnim={showAnim} endValue={animatedParams.centerY} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                           <div className="flex flex-col gap-1">
                             <button
                               type="button"
@@ -2497,20 +3153,28 @@ export default function AppDither() {
                       </button>
                     </div>
                   )}
-                  <Slider value={generativeDensity} onChange={setGenerativeDensity} min={1} max={500} step={1} label="Density" />
-                  <Slider value={generativeRegularity} onChange={setGenerativeRegularity} min={0} max={100} step={1} label="Regularity" />
-                  <Slider value={generativeDislocate} onChange={setGenerativeDislocate} min={-50} max={50} step={0.1} label="Dislocate" />
+                  <AnimSlider animKey="density" value={generativeDensity} onChange={setGenerativeDensity} min={1} max={500} step={1} label="Density" showAnim={showAnim} endValue={animatedParams.density} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="regularity" value={generativeRegularity} onChange={setGenerativeRegularity} min={0} max={100} step={1} label="Regularity" showAnim={showAnim} endValue={animatedParams.regularity} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="dislocate" value={generativeDislocate} onChange={setGenerativeDislocate} min={-50} max={50} step={0.1} label="Dislocate" showAnim={showAnim} endValue={animatedParams.dislocate} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-dither-muted-mid mt-2 mb-1">Noise</div>
-                  <Slider value={generativeNoiseAmplitude} onChange={setGenerativeNoiseAmplitude} min={0} max={50} step={0.1} label="Amplitude" />
-                  <Slider value={generativeNoiseFrequency} onChange={setGenerativeNoiseFrequency} min={0.1} max={10} step={0.1} label="Frequency" />
+                  <AnimSlider animKey="noiseAmplitude" value={generativeNoiseAmplitude} onChange={setGenerativeNoiseAmplitude} min={0} max={50} step={0.1} label="Amplitude" showAnim={showAnim} endValue={animatedParams.noiseAmplitude} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="noiseFrequency" value={generativeNoiseFrequency} onChange={setGenerativeNoiseFrequency} min={0.1} max={10} step={0.1} label="Frequency" showAnim={showAnim} endValue={animatedParams.noiseFrequency} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-dither-muted-mid mt-2 mb-1">Perlin</div>
-                  <Slider value={generativePerlinAmplitude} onChange={setGenerativePerlinAmplitude} min={0} max={100} step={0.5} label="Amplitude" />
-                  <Slider value={generativePerlinFrequency} onChange={setGenerativePerlinFrequency} min={1} max={500} step={1} label="Frequency" />
+                  <AnimSlider animKey="perlinAmplitude" value={generativePerlinAmplitude} onChange={setGenerativePerlinAmplitude} min={0} max={100} step={0.5} label="Amplitude" showAnim={showAnim} endValue={animatedParams.perlinAmplitude} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="perlinFrequency" value={generativePerlinFrequency} onChange={setGenerativePerlinFrequency} min={1} max={500} step={1} label="Frequency" showAnim={showAnim} endValue={animatedParams.perlinFrequency} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                   <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-dither-muted-mid mt-2 mb-1">Sine</div>
-                  <Slider value={generativeSineAmplitude} onChange={setGenerativeSineAmplitude} min={0} max={100} step={0.5} label="Amplitude" />
-                  <Slider value={generativeSineFrequency} onChange={setGenerativeSineFrequency} min={0.5} max={50} step={0.5} label="Frequency" />
+                  <AnimSlider animKey="sineAmplitude" value={generativeSineAmplitude} onChange={setGenerativeSineAmplitude} min={0} max={100} step={0.5} label="Amplitude" showAnim={showAnim} endValue={animatedParams.sineAmplitude} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                  <AnimSlider animKey="sineFrequency" value={generativeSineFrequency} onChange={setGenerativeSineFrequency} min={0.5} max={50} step={0.5} label="Frequency" showAnim={showAnim} endValue={animatedParams.sineFrequency} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
                 </>
               )}
+              <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-dither-muted-mid mt-2 mb-1">Seed / Time</div>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 min-w-0">
+                  <AnimSlider animKey="seed" value={generativeSeed} onChange={v => setGenerativeSeed(Math.round(v))} min={0} max={9999} step={1} label="Seed" showAnim={showAnim} endValue={animatedParams.seed} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
+                </div>
+                <button type="button" onClick={() => setGenerativeSeed(Math.floor(Math.random() * 10000))} className="px-2 py-0.5 text-[11px] bg-dither-border border border-dither-border-hover rounded cursor-pointer hover:bg-dither-border-hover text-dither-muted-light flex-shrink-0 self-start" title="Random seed">↺</button>
+              </div>
+              <AnimSlider animKey="time" value={generativeTime} onChange={setGenerativeTime} min={0} max={100} step={0.1} label="Time" showAnim={showAnim} endValue={animatedParams.time} onSetEnd={setEndValue} onClearEnd={clearEndValue} />
               <button
                 type="button"
                 className="flex items-center justify-center gap-2 py-2.5 px-4 text-[13px] font-medium bg-dither-border border border-dither-border-active rounded-lg text-dither-text cursor-pointer transition-colors hover:bg-dither-border-hover hover:border-dither-border-light disabled:opacity-50 disabled:cursor-not-allowed mt-3"

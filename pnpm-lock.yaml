@@ -56,6 +56,9 @@ importers:
       three:
         specifier: ^0.160.0
         version: 0.160.1
+      tweakpane:
+        specifier: ^4.0.5
+        version: 4.0.5
     devDependencies:
       autoprefixer:
         specifier: ^10.4.20
@@ -5583,6 +5586,9 @@ packages:
 
   tunnel-rat@0.1.2:
     resolution: {integrity: sha512-lR5VHmkPhzdhrM092lI2nACsLO4QubF0/yoOhzX7c+wIpbN1GjHNzCc91QlpxBi+cnx8vVJ+Ur6vL5cEoQPFpQ==}
+
+  tweakpane@4.0.5:
+    resolution: {integrity: sha512-rxEXdSI+ArlG1RyO6FghC4ZUX8JkEfz8F3v1JuteXSV0pEtHJzyo07fcDG+NsJfN5L39kSbCYbB9cBGHyuI/tQ==}
 
   type-check@0.3.2:
     resolution: {integrity: sha512-ZCmOJdvOWDBYJlzAoFkC+Q0+bUyEOS1ltgp1MGU03fqHG+dbi9tBFU2Rd9QKiDZFAYrhPh2JUf7rZRIuHRKtOg==}
@@ -12696,6 +12702,8 @@ snapshots:
       - '@types/react'
       - immer
       - react
+
+  tweakpane@4.0.5: {}
 
   type-check@0.3.2:
     dependencies:
